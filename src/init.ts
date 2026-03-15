@@ -1,7 +1,7 @@
 import prompts from 'prompts'
 import chalk from 'chalk'
 import { loadCredentials, saveCredentials, getCredentialsPath, type Credentials } from './credentials.js'
-import { detectForge } from './forge.js'
+import { detectForge, detectForgeAsync, ForgeDetectionNeeded } from './forge.js'
 import { verifyCredentials } from './api.js'
 import { printBanner, printSuccess, printError, printInfo, spinner } from './ui.js'
 
@@ -15,15 +15,32 @@ export async function runInit(): Promise<void> {
   let detectedWorkspace: string | undefined
   let detectedRepo: string | undefined
   try {
-    const info = detectForge()
-    detectedForge = info.forge
-    detectedHostname = info.hostname
-    detectedWorkspace = info.workspace
-    detectedRepo = info.repo
-    const isSelfHosted = !['github.com', 'gitlab.com', 'bitbucket.org'].includes(info.hostname)
-    const hostLabel = isSelfHosted ? ` (${info.hostname})` : ''
-    printInfo(`Detected ${info.forge}${hostLabel} repo: ${info.workspace}/${info.repo}`)
-    console.log()
+    let info
+    try {
+      info = detectForge()
+    } catch (err: any) {
+      if (err instanceof ForgeDetectionNeeded) {
+        const s = spinner(`Probing ${err.hostname} to detect forge type...`)
+        try {
+          info = await detectForgeAsync(err.hostname, err.pathPart, err.remoteUrl)
+          s.succeed(`Detected ${info.forge} (${info.hostname})`)
+        } catch {
+          s.warn(`Could not detect forge for ${err.hostname} — select manually below`)
+        }
+      } else {
+        throw err
+      }
+    }
+    if (info) {
+      detectedForge = info.forge
+      detectedHostname = info.hostname
+      detectedWorkspace = info.workspace
+      detectedRepo = info.repo
+      const isSelfHosted = !['github.com', 'gitlab.com', 'bitbucket.org'].includes(info.hostname)
+      const hostLabel = isSelfHosted ? ` (${info.hostname})` : ''
+      printInfo(`Detected ${info.forge}${hostLabel} repo: ${info.workspace}/${info.repo}`)
+      console.log()
+    }
   } catch {
     // Not in a git repo — that's fine, user can still configure
   }

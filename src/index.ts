@@ -2,7 +2,7 @@
 
 import { Command } from 'commander'
 import prompts from 'prompts'
-import { detectForge, getCurrentBranch } from './forge.js'
+import { detectForge, detectForgeAsync, getCurrentBranch, ForgeDetectionNeeded } from './forge.js'
 import { hasCredentials, deleteCredentials, loadCredentials } from './credentials.js'
 import { createWorktree, removeWorktree, getDiff, getDiffStat, getChangedFiles, getCommitLog } from './git.js'
 import { listPRs, getPR, postComment, type PRInfo } from './api.js'
@@ -154,7 +154,16 @@ program
       const forgeSpinner = spinner('Detecting forge...')
       let forgeInfo
       try {
-        forgeInfo = detectForge()
+        try {
+          forgeInfo = detectForge()
+        } catch (err: any) {
+          if (err instanceof ForgeDetectionNeeded) {
+            forgeSpinner.text = `Probing ${err.hostname} to detect forge type...`
+            forgeInfo = await detectForgeAsync(err.hostname, err.pathPart, err.remoteUrl)
+          } else {
+            throw err
+          }
+        }
         const isSelfHosted = !['github.com', 'gitlab.com', 'bitbucket.org'].includes(forgeInfo.hostname)
         const hostLabel = isSelfHosted ? ` (${forgeInfo.hostname})` : ''
         forgeSpinner.succeed(`${forgeInfo.forge}${hostLabel} — ${forgeInfo.workspace}/${forgeInfo.repo}`)
@@ -453,7 +462,16 @@ program
   .action(async () => {
     try {
       printBanner()
-      const forgeInfo = detectForge()
+      let forgeInfo
+      try {
+        forgeInfo = detectForge()
+      } catch (err: any) {
+        if (err instanceof ForgeDetectionNeeded) {
+          forgeInfo = await detectForgeAsync(err.hostname, err.pathPart, err.remoteUrl)
+        } else {
+          throw err
+        }
+      }
 
       if (!hasCredentials(forgeInfo.forge)) {
         printError(`No ${forgeInfo.forge} credentials found. Run: prai init`)
@@ -486,7 +504,16 @@ program
 
     try {
       printBanner()
-      const forgeInfo = detectForge()
+      let forgeInfo
+      try {
+        forgeInfo = detectForge()
+      } catch (err: any) {
+        if (err instanceof ForgeDetectionNeeded) {
+          forgeInfo = await detectForgeAsync(err.hostname, err.pathPart, err.remoteUrl)
+        } else {
+          throw err
+        }
+      }
 
       if (!hasCredentials(forgeInfo.forge)) {
         printError(`No ${forgeInfo.forge} credentials found. Run: prai init`)
