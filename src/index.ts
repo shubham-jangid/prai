@@ -6,7 +6,7 @@ import { detectForge, getCurrentBranch } from './forge.js'
 import { hasCredentials, deleteCredentials, loadCredentials } from './credentials.js'
 import { createWorktree, removeWorktree, getDiff, getDiffStat, getChangedFiles, getCommitLog } from './git.js'
 import { listPRs, getPR, postComment, type PRInfo } from './api.js'
-import { reviewPR, describePR } from './reviewer.js'
+import { reviewPR, describePR, loadTeamRules, type PromptContext } from './reviewer.js'
 import {
   printBanner, printPRInfo, printPRList, printReview, printDiffStat,
   printError, printSuccess, printInfo, spinner, formatReviewAsMarkdown,
@@ -141,7 +141,11 @@ program
   .description('Review a PR (auto-detects from current branch if no PR number given)')
   .option('--post', 'Post review as a comment on the PR')
   .option('--no-worktree', 'Skip worktree creation (use current working directory)')
-  .action(async (prNumberArg: string | undefined, options: { post?: boolean; worktree?: boolean }) => {
+  .option('--focus <areas>', 'Focus review on specific areas (e.g. "security, error handling")')
+  .option('--context <description>', 'Explain what this change is about (e.g. "migrating from JWT to sessions")')
+  .option('--prompt <instructions>', 'Add custom review instructions (e.g. "check for N+1 queries")')
+  .option('--verbose', 'Show the full prompt sent to Claude')
+  .action(async (prNumberArg: string | undefined, options: { post?: boolean; worktree?: boolean; focus?: string; context?: string; prompt?: string; verbose?: boolean }) => {
     try {
       printBanner()
 
@@ -272,12 +276,32 @@ program
       printDiffStat(diffStat)
       console.log()
 
-      // 6. Run review (cancellable via Ctrl+C)
+      // 6. Build prompt context & run review (cancellable via Ctrl+C)
+      const commitLog = getCommitLog(reviewDir, pr.destBranch)
+      const teamRules = loadTeamRules(reviewDir)
+      const diffLines = diff.split('\n').length
+
+      const ctx: PromptContext = {
+        diff, diffStat, pr, commitLog, teamRules, diffLines,
+        focus: options.focus,
+        context: options.context,
+        prompt: options.prompt,
+      }
+
       activeAbortController = new AbortController()
       const reviewSpinner = spinner('Claude is reviewing the PR... (press Ctrl+C to stop)')
       let review
       try {
-        review = await reviewPR(reviewDir, diff, diffStat, activeAbortController.signal)
+        const result = await reviewPR(ctx, reviewDir, activeAbortController.signal)
+        review = result.review
+
+        if (options.verbose) {
+          console.log()
+          console.log('\n── Prompt sent to Claude ──────────────────────')
+          console.log(result.prompt)
+          console.log('───────────────────────────────────────────────\n')
+        }
+
         reviewSpinner.succeed('Review complete')
       } catch (err: any) {
         if (err.message === 'Review cancelled') {
@@ -373,7 +397,10 @@ program
 program
   .command('describe [prNumber]')
   .description('Generate a PR description from the diff')
-  .action(async (prNumberArg: string | undefined) => {
+  .option('--focus <areas>', 'Focus on specific areas of the change')
+  .option('--context <description>', 'Explain what this change is about')
+  .option('--verbose', 'Show the full prompt sent to Claude')
+  .action(async (prNumberArg: string | undefined, options: { focus?: string; context?: string; verbose?: boolean }) => {
     let worktreePath: string | null = null
     let prNumber: number | null = null
 
@@ -426,9 +453,26 @@ program
         return
       }
 
+      const teamRules = loadTeamRules(worktreePath)
+      const ctx: PromptContext = {
+        diff, diffStat, pr, commitLog, teamRules,
+        diffLines: diff.split('\n').length,
+        focus: options.focus,
+        context: options.context,
+      }
+
       activeAbortController = new AbortController()
       const s = spinner('Generating description... (press Ctrl+C to stop)')
-      const description = await describePR(worktreePath, diff, diffStat, commitLog, activeAbortController.signal)
+      const result = await describePR(ctx, worktreePath, activeAbortController.signal)
+      const description = result.description
+
+      if (options.verbose) {
+        console.log()
+        console.log('\n── Prompt sent to Claude ──────────────────────')
+        console.log(result.prompt)
+        console.log('───────────────────────────────────────────────\n')
+      }
+
       s.succeed('Description generated')
       activeAbortController = null
 

@@ -80,6 +80,7 @@ function request(url: string, options: RequestOptions = {}): Promise<any> {
 export interface PRInfo {
   number: number
   title: string
+  description: string
   sourceBranch: string
   destBranch: string
   author: string
@@ -99,6 +100,7 @@ export async function githubListPRs(workspace: string, repo: string): Promise<PR
   return data.map((pr: any) => ({
     number: pr.number,
     title: pr.title,
+    description: pr.body || '',
     sourceBranch: pr.head.ref,
     destBranch: pr.base.ref,
     author: pr.user.login,
@@ -117,6 +119,7 @@ export async function githubGetPR(workspace: string, repo: string, prNum: number
   return {
     number: pr.number,
     title: pr.title,
+    description: pr.body || '',
     sourceBranch: pr.head.ref,
     destBranch: pr.base.ref,
     author: pr.user.login,
@@ -146,6 +149,7 @@ export async function bitbucketListPRs(workspace: string, repo: string): Promise
   return data.values.map((pr: any) => ({
     number: pr.id,
     title: pr.title,
+    description: pr.description || '',
     sourceBranch: pr.source.branch.name,
     destBranch: pr.destination.branch.name,
     author: pr.author.display_name,
@@ -164,6 +168,7 @@ export async function bitbucketGetPR(workspace: string, repo: string, prNum: num
   return {
     number: pr.id,
     title: pr.title,
+    description: pr.description || '',
     sourceBranch: pr.source.branch.name,
     destBranch: pr.destination.branch.name,
     author: pr.author.display_name,
@@ -194,6 +199,7 @@ export async function gitlabListPRs(workspace: string, repo: string): Promise<PR
   return data.map((mr: any) => ({
     number: mr.iid,
     title: mr.title,
+    description: mr.description || '',
     sourceBranch: mr.source_branch,
     destBranch: mr.target_branch,
     author: mr.author.name,
@@ -213,6 +219,7 @@ export async function gitlabGetPR(workspace: string, repo: string, prNum: number
   return {
     number: mr.iid,
     title: mr.title,
+    description: mr.description || '',
     sourceBranch: mr.source_branch,
     destBranch: mr.target_branch,
     author: mr.author.name,

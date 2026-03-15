@@ -105,13 +105,29 @@ prai review 47 --post
 
 # Skip worktree creation (use current directory)
 prai review 47 --no-worktree
+
+# Tell Claude what this change is about
+prai review 47 --context "migrating auth from JWT to session-based"
+
+# Focus review on specific areas
+prai review 47 --focus "security, error handling"
+
+# Add custom review instructions
+prai review 47 --prompt "check for N+1 queries and missing indexes"
+
+# See the full prompt sent to Claude
+prai review 47 --verbose
+
+# Combine flags
+prai review 47 --focus security --context "JWT migration" --post
 ```
 
 **What happens:**
 
 ```
 detect forge → check credentials → fetch PR metadata → create worktree
-→ compute diff → Claude reviews with full codebase context → show results
+→ compute diff → build prompt (PR context + team rules + flags + checklist)
+→ Claude reviews with full codebase context → show results
 → optionally post to PR → clean up worktree
 ```
 
@@ -132,6 +148,12 @@ prai describe
 
 # For a specific PR
 prai describe 47
+
+# With context about the change
+prai describe 47 --context "migrating auth from JWT to sessions"
+
+# Focus on specific aspects
+prai describe 47 --focus "what changed in the API layer"
 ```
 
 Generates a structured description from the diff and commit messages:
@@ -177,9 +199,20 @@ suppress:
 architecture_rules:
   - "All API endpoints must validate input with zod schemas"
   - "Database queries must go through the repository layer"
+
+custom_instructions: |
+  Our team uses Result types instead of exceptions.
+  Flag any throw statements in service layer code.
 ```
 
-High-risk modules get extra scrutiny. Suppressions skip specific check categories. Architecture rules are checked against the diff.
+These are parsed and injected as structured prompt sections:
+
+- **high_risk_modules** — Claude reviews these paths with extra scrutiny
+- **suppress** — Claude skips these check categories
+- **architecture_rules** — Claude verifies the diff complies with these rules
+- **custom_instructions** — freeform text injected into the prompt
+
+Invalid YAML is caught gracefully — prai warns and continues without team rules.
 
 ## How it works
 
@@ -194,16 +227,30 @@ High-risk modules get extra scrutiny. Suppressions skip specific check categorie
 ┌──────────────────────────────┐
 │  Isolated worktree           │
 │  (your working dir untouched)│
-│                              │
 │  git diff origin/main...HEAD │
 └────────────┬─────────────────┘
              │
-             │  diff + changed files + review checklist
+             ▼
+┌──────────────────────────────┐
+│  Composable Prompt Pipeline  │
+│                              │
+│  base review rules           │
+│  + tool guidance             │
+│  + review checklist          │
+│  + PR context (title, desc,  │
+│    branch intent, commits)   │
+│  + team rules (.prai/rules)  │
+│  + --focus areas             │
+│  + --context explanation     │
+│  + --prompt custom instr.    │
+│  + adaptive hints (by size)  │
+│  + diff                      │
+└────────────┬─────────────────┘
+             │
              ▼
 ┌──────────────────────────────┐
 │  Claude Code CLI             │
 │  (runs locally, reads files) │
-│  -p <prompt>                 │
 │  --allowedTools Read,Grep,   │
 │                 Glob         │
 │  --max-turns 3               │
@@ -221,7 +268,8 @@ Key design decisions:
 
 - **Worktree isolation** — creates a temporary git worktree so prai never touches your working directory. Cleaned up automatically, even on Ctrl+C.
 - **Claude reads full files** — not just the diff. This lets it understand context, spot issues in surrounding code, and avoid false positives for things already handled.
-- **JSON output format** — Claude returns structured JSON that prai parses for consistent, machine-readable output. Graceful fallback if JSON parsing fails.
+- **Composable prompt pipeline** — the prompt is assembled from independent segments (PR context, team rules, focus areas, etc.). Each segment is a pure function that returns a string. Empty segments are skipped. Easy to extend.
+- **Adaptive review depth** — small diffs (<100 lines) get deep-dive instructions. Large diffs (>500 lines) get instructions to prioritize critical paths. Diffs over 8000 lines are truncated with a warning.
 - **Two-pass review** — critical issues (security, data safety) are separated from informational ones (performance, style) so you know what to fix first.
 
 ## Claude Code skill
