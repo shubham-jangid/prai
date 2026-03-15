@@ -1,140 +1,127 @@
-# prai
+<p align="center">
+  <h1 align="center">prai</h1>
+  <p align="center">
+    <strong>AI code reviews from your terminal. Free. Local-first. Multi-forge.</strong>
+  </p>
+  <p align="center">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+    <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node-18%2B-green.svg" alt="Node"></a>
+    <a href="https://github.com"><img src="https://img.shields.io/badge/GitHub-supported-black.svg" alt="GitHub"></a>
+    <a href="https://bitbucket.org"><img src="https://img.shields.io/badge/Bitbucket-supported-blue.svg" alt="Bitbucket"></a>
+    <a href="https://gitlab.com"><img src="https://img.shields.io/badge/GitLab-supported-orange.svg" alt="GitLab"></a>
+  </p>
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/Node-18%2B-green.svg)](https://nodejs.org)
-[![GitHub](https://img.shields.io/badge/GitHub-supported-black.svg)](https://github.com)
-[![Bitbucket](https://img.shields.io/badge/Bitbucket-supported-blue.svg)](https://bitbucket.org)
-[![GitLab](https://img.shields.io/badge/GitLab-supported-orange.svg)](https://gitlab.com)
+---
 
-AI-powered PR reviewer that runs locally using your Claude Code subscription. Your code never leaves your machine.
+prai reviews your pull requests using Claude Code — the same AI that can read your entire codebase, not just the diff. It runs from your terminal, uses your existing Claude Code subscription, and works with GitHub, Bitbucket, and GitLab.
 
 ```
-$ prai 47
+$ prai
 
 ╭ prai — AI PR reviewer ╮
 ╰────────────────────────╯
 
- ✔ github — acme/backend
- ✔ PR #47: feat/login-fix — 4 files changed
- ✔ Review complete
+? Select a PR to review:
+❯ #47  feat/login-fix — Fix OAuth token refresh
+  #45  bugfix/null-check — Handle missing user profile
+  #43  feat/dashboard — Add analytics dashboard
 
-╭ Complexity  ████████░░  8/10          ╮
-│ files 4  lines 312  est. 60min        │
-╰───────────────────────────────────────╯
+✔ Review complete
 
   CRITICAL  src/auth/oauth.ts:89
   Token refresh has no retry — a single 503 kills the session
   fix: Wrap in exponential backoff (3 retries)
 
-  ...
+  WARNING  src/auth/oauth.ts:142
+  Access token stored in localStorage — vulnerable to XSS
+  fix: Move to httpOnly cookie
 
   VERDICT: Changes requested
+
+? What next?
+❯ Accept review
+  Give feedback — explain why an issue is incorrect
+  Post to PR — post as a comment on the PR
 ```
 
-## Quickstart
+## Install
 
-**Prerequisites:** [Claude Code CLI](https://claude.ai/download) installed and logged in, Node.js 18+, Git.
+> **You need [Claude Code](https://claude.ai/download) installed and logged in.** prai uses your existing subscription — no extra API keys or costs.
+
+```bash
+npm install -g prai-review
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/shubham-jangid/prai.git
 cd prai && npm install && npm run build && npm link
 ```
 
-Then, in any repo with a git remote:
+## Setup (one time)
 
 ```bash
-prai init      # one-time — set up forge credentials
-prai 47        # review PR #47
+prai init
 ```
 
-That's it. prai auto-detects your forge (GitHub, Bitbucket, or GitLab) from the git remote.
+That's it. prai detects your forge from the git remote and walks you through auth:
 
-## Why prai?
+- **GitHub** — personal access token with `repo` scope
+- **Bitbucket** — email + [API token](https://id.atlassian.com/manage-profile/security/api-tokens)
+- **GitLab** — personal access token with `api` scope
 
-|                        | prai              | CodeRabbit       | GitHub Copilot   | Sourcery         |
-| ---------------------- | ----------------- | ---------------- | ---------------- | ---------------- |
-| Runs locally           | Yes               | No (cloud)       | No (cloud)       | No (cloud)       |
-| Code leaves machine    | Never             | Always           | Always           | Always           |
-| Extra cost             | $0                | $15/seat/mo      | $19/seat/mo      | $14/seat/mo      |
-| Full codebase context  | Yes               | Diff only        | Diff only        | Diff only        |
-| Custom team rules      | `.prai/rules.yaml`| Limited          | No               | Limited          |
-| Feedback loop          | Yes               | No               | No               | No               |
-| Multi-forge            | GH + BB + GL      | GitHub only      | GitHub only      | GitHub only      |
+Self-hosted GitHub Enterprise and GitLab instances are supported automatically.
 
-prai uses your existing Claude Code subscription. No extra API keys, no per-seat pricing, no third-party servers.
+## Usage
 
-## Commands
+```bash
+prai              # pick a PR interactively
+prai 47           # review PR #47 directly
+prai describe 47  # generate a PR description
+prai list         # list open PRs
+```
 
-| Command         | What it does                         |
-| --------------- | ------------------------------------ |
-| `prai`          | Review PR from current branch        |
-| `prai 47`       | Review PR #47                        |
-| `prai describe` | Generate a PR description from diff  |
-| `prai list`     | List open PRs                        |
-| `prai init`     | One-time credential setup            |
-| `prai logout`   | Remove stored credentials            |
+That's the whole CLI. No config files, no YAML pipelines, no CI setup.
 
-Run `prai` with no arguments to get an interactive experience — pick a PR from the list, choose review depth, and add instructions.
-
-## Guide the review
+### Guide the review
 
 Tell Claude what to focus on:
 
 ```bash
 prai 47 --focus "security, error handling"
-prai 47 --context "migrating auth from JWT to session-based"
+prai 47 --context "migrating auth from JWT to sessions"
 prai 47 --prompt "check for N+1 queries and missing indexes"
 ```
 
-- `--focus` narrows the review to specific areas
-- `--context` explains what the change is about (so Claude understands intent)
-- `--prompt` adds custom review instructions
+Or just run `prai` with no flags — it'll ask you interactively after you pick a PR.
 
-Combine them freely: `prai 47 --focus security --context "JWT migration" --post`
+### Deep review
 
-## Deep review
-
-By default, prai does a quick review (~1 min) using the diff plus light file reading. For thorough reviews:
+By default, prai does a quick review (~1 min). For thorough reviews where Claude reads every changed file, checks callers, and verifies tests:
 
 ```bash
 prai 47 --deep
 ```
 
-Deep mode tells Claude to read every changed file in full, check callers of modified functions, and verify test coverage. Takes 3-5 minutes but catches significantly more.
+Takes 3-5 minutes but catches significantly more.
 
-## Supervised feedback
+### Push back on findings
 
-After the review, you can push back on findings you disagree with:
+Disagree with something? Choose **Give feedback** after the review, explain why an issue is correct or intentional, and Claude re-evaluates. It drops justified issues and keeps valid ones. Go back and forth as many rounds as you need.
 
-```
-? What next?
-❯ Accept review
-  Give feedback — Explain why an issue is incorrect or intentional
-  Post to PR
-```
-
-Choose **Give feedback**, explain why the flagged issue is correct or intentional, and Claude re-evaluates. It drops justified issues and keeps valid ones. Go back and forth as many rounds as you need.
-
-## Generate a PR description
-
-```bash
-prai describe 47
-prai describe 47 --context "migrating auth from JWT to sessions"
-```
-
-Generates a structured description from the diff and commit history: summary, changes grouped by area, how to test, and risk assessment. Offers to show the raw markdown for pasting into the PR.
-
-## Auto-post to PR
+### Post to PR
 
 ```bash
 prai 47 --post
 ```
 
-Posts the review as a comment on the PR when done.
+Posts the review as a comment on the PR.
 
 ## Team rules
 
-Drop a `.prai/rules.yaml` in your repo root to customize reviews for your team:
+Drop a `.prai/rules.yaml` in your repo to customize reviews for your whole team:
 
 ```yaml
 # .prai/rules.yaml
@@ -156,39 +143,26 @@ custom_instructions: |
   Flag any throw statements in service layer code.
 ```
 
-| Field                  | What it does                                         |
-| ---------------------- | ---------------------------------------------------- |
-| `high_risk_modules`    | Extra scrutiny on these paths                        |
-| `suppress`             | Skip these check categories                          |
-| `architecture_rules`   | Claude verifies the diff complies with these rules   |
-| `custom_instructions`  | Freeform text injected into the review prompt        |
+## Use inside Claude Code
 
-## Credential setup
+prai ships as a Claude Code skill:
 
-```bash
-prai init
 ```
-
-Auto-detects your forge and walks you through authentication:
-
-| Forge     | What you need                                                            |
-| --------- | ------------------------------------------------------------------------ |
-| GitHub    | Personal access token with `repo` scope                                  |
-| Bitbucket | Atlassian email + [API token](https://id.atlassian.com/manage-profile/security/api-tokens) |
-| GitLab    | Personal access token with `api` scope                                   |
-
-Credentials are verified immediately. Stored in `~/.prai/credentials.json` with `600` permissions (owner-only). Remove with `prai logout`.
-
-## Claude Code skill
-
-Use prai inside Claude Code sessions:
-
-```bash
-/prai           # auto-detect and review
+/prai           # interactive PR review
 /prai 47        # review PR #47
-/prai init      # set up credentials
 /prai describe  # generate PR description
 ```
+
+## All flags
+
+| Flag | What it does |
+|---|---|
+| `--focus` | Narrow review to specific areas |
+| `--context` | Explain what the change is about |
+| `--prompt` | Custom review instructions |
+| `--deep` | Read every changed file in full |
+| `--post` | Post review as a PR comment |
+| `--verbose` | Show the full prompt sent to Claude |
 
 ## How it works
 
@@ -246,7 +220,7 @@ Use prai inside Claude Code sessions:
 **Key design decisions:**
 
 - **Worktree isolation** — temporary git worktree so prai never touches your working directory. Cleaned up automatically, even on Ctrl+C.
-- **Full file reading** — Claude reads changed files and their imports, not just the diff. This avoids false positives.
+- **Full file reading** — Claude reads changed files and their imports, not just the diff. This avoids false positives from missing context.
 - **Composable prompt pipeline** — the prompt is assembled from independent segments. Each is a pure function returning a string. Empty segments are skipped.
 - **Adaptive depth** — small diffs (<100 lines) get deep-dive instructions. Large diffs (>500 lines) get instructions to prioritize critical paths. Over 8000 lines are truncated with a warning.
 - **Two-pass review** — critical issues (security, data safety) separated from warnings (performance, style).
