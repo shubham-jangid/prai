@@ -75,6 +75,30 @@ function request(url: string, options: RequestOptions = {}): Promise<any> {
   })
 }
 
+// ─── API Base URL (self-hosted support) ──────────────────
+
+function getApiBase(forge: string, hostname: string): string {
+  if (forge === 'github') {
+    // github.com uses api.github.com; GitHub Enterprise uses <host>/api/v3
+    if (hostname === 'github.com') return 'https://api.github.com'
+    return `https://${hostname}/api/v3`
+  }
+  if (forge === 'gitlab') {
+    // Always <host>/api/v4 (works for gitlab.com and self-hosted)
+    return `https://${hostname}/api/v4`
+  }
+  if (forge === 'bitbucket') {
+    // Bitbucket Cloud uses api.bitbucket.org; Bitbucket Server has a different API
+    if (hostname === 'bitbucket.org') return 'https://api.bitbucket.org/2.0'
+    throw new Error(
+      `Self-hosted Bitbucket Server is not yet supported.\n` +
+      `prai currently supports Bitbucket Cloud (bitbucket.org) only.\n` +
+      `Detected hostname: ${hostname}`
+    )
+  }
+  throw new Error(`Unsupported forge: ${forge}`)
+}
+
 // ─── PR Types ────────────────────────────────────────────
 
 export interface PRInfo {
@@ -90,10 +114,11 @@ export interface PRInfo {
 
 // ─── GitHub ──────────────────────────────────────────────
 
-export async function githubListPRs(workspace: string, repo: string): Promise<PRInfo[]> {
+export async function githubListPRs(hostname: string, workspace: string, repo: string): Promise<PRInfo[]> {
+  const base = getApiBase('github', hostname)
   const headers = getAuthHeaders('github') as Record<string, string>
   const data = await request(
-    `https://api.github.com/repos/${workspace}/${repo}/pulls?state=open&per_page=20`,
+    `${base}/repos/${workspace}/${repo}/pulls?state=open&per_page=20`,
     { headers }
   )
   if (!Array.isArray(data)) return []
@@ -109,10 +134,11 @@ export async function githubListPRs(workspace: string, repo: string): Promise<PR
   }))
 }
 
-export async function githubGetPR(workspace: string, repo: string, prNum: number): Promise<PRInfo> {
+export async function githubGetPR(hostname: string, workspace: string, repo: string, prNum: number): Promise<PRInfo> {
+  const base = getApiBase('github', hostname)
   const headers = getAuthHeaders('github') as Record<string, string>
   const pr = await request(
-    `https://api.github.com/repos/${workspace}/${repo}/pulls/${prNum}`,
+    `${base}/repos/${workspace}/${repo}/pulls/${prNum}`,
     { headers }
   )
   if (pr.message) throw new Error(`GitHub API: ${pr.message}`)
@@ -128,20 +154,22 @@ export async function githubGetPR(workspace: string, repo: string, prNum: number
   }
 }
 
-export async function githubPostComment(workspace: string, repo: string, prNum: number, body: string): Promise<void> {
+export async function githubPostComment(hostname: string, workspace: string, repo: string, prNum: number, body: string): Promise<void> {
+  const base = getApiBase('github', hostname)
   const headers = getAuthHeaders('github') as Record<string, string>
   await request(
-    `https://api.github.com/repos/${workspace}/${repo}/issues/${prNum}/comments`,
+    `${base}/repos/${workspace}/${repo}/issues/${prNum}/comments`,
     { method: 'POST', headers, body: JSON.stringify({ body }) }
   )
 }
 
 // ─── Bitbucket ───────────────────────────────────────────
 
-export async function bitbucketListPRs(workspace: string, repo: string): Promise<PRInfo[]> {
+export async function bitbucketListPRs(hostname: string, workspace: string, repo: string): Promise<PRInfo[]> {
+  const base = getApiBase('bitbucket', hostname)
   const { username, password } = getBitbucketAuth()
   const data = await request(
-    `https://api.bitbucket.org/2.0/repositories/${workspace}/${repo}/pullrequests?state=OPEN&pagelen=20`,
+    `${base}/repositories/${workspace}/${repo}/pullrequests?state=OPEN&pagelen=20`,
     { auth: `${username}:${password}` }
   )
   if (data.type === 'error') throw new Error(data.error?.message || 'Bitbucket API error')
@@ -158,10 +186,11 @@ export async function bitbucketListPRs(workspace: string, repo: string): Promise
   }))
 }
 
-export async function bitbucketGetPR(workspace: string, repo: string, prNum: number): Promise<PRInfo> {
+export async function bitbucketGetPR(hostname: string, workspace: string, repo: string, prNum: number): Promise<PRInfo> {
+  const base = getApiBase('bitbucket', hostname)
   const { username, password } = getBitbucketAuth()
   const pr = await request(
-    `https://api.bitbucket.org/2.0/repositories/${workspace}/${repo}/pullrequests/${prNum}`,
+    `${base}/repositories/${workspace}/${repo}/pullrequests/${prNum}`,
     { auth: `${username}:${password}` }
   )
   if (pr.type === 'error') throw new Error(pr.error?.message || 'Bitbucket API error')
@@ -177,10 +206,11 @@ export async function bitbucketGetPR(workspace: string, repo: string, prNum: num
   }
 }
 
-export async function bitbucketPostComment(workspace: string, repo: string, prNum: number, body: string): Promise<void> {
+export async function bitbucketPostComment(hostname: string, workspace: string, repo: string, prNum: number, body: string): Promise<void> {
+  const base = getApiBase('bitbucket', hostname)
   const { username, password } = getBitbucketAuth()
   const result = await request(
-    `https://api.bitbucket.org/2.0/repositories/${workspace}/${repo}/pullrequests/${prNum}/comments`,
+    `${base}/repositories/${workspace}/${repo}/pullrequests/${prNum}/comments`,
     { method: 'POST', auth: `${username}:${password}`, body: JSON.stringify({ content: { raw: body } }) }
   )
   if (result.type === 'error') throw new Error(result.error?.message || 'Failed to post comment')
@@ -188,11 +218,12 @@ export async function bitbucketPostComment(workspace: string, repo: string, prNu
 
 // ─── GitLab ──────────────────────────────────────────────
 
-export async function gitlabListPRs(workspace: string, repo: string): Promise<PRInfo[]> {
+export async function gitlabListPRs(hostname: string, workspace: string, repo: string): Promise<PRInfo[]> {
+  const base = getApiBase('gitlab', hostname)
   const headers = getAuthHeaders('gitlab') as Record<string, string>
   const projectPath = encodeURIComponent(`${workspace}/${repo}`)
   const data = await request(
-    `https://gitlab.com/api/v4/projects/${projectPath}/merge_requests?state=opened&per_page=20`,
+    `${base}/projects/${projectPath}/merge_requests?state=opened&per_page=20`,
     { headers }
   )
   if (!Array.isArray(data)) return []
@@ -208,11 +239,12 @@ export async function gitlabListPRs(workspace: string, repo: string): Promise<PR
   }))
 }
 
-export async function gitlabGetPR(workspace: string, repo: string, prNum: number): Promise<PRInfo> {
+export async function gitlabGetPR(hostname: string, workspace: string, repo: string, prNum: number): Promise<PRInfo> {
+  const base = getApiBase('gitlab', hostname)
   const headers = getAuthHeaders('gitlab') as Record<string, string>
   const projectPath = encodeURIComponent(`${workspace}/${repo}`)
   const mr = await request(
-    `https://gitlab.com/api/v4/projects/${projectPath}/merge_requests/${prNum}`,
+    `${base}/projects/${projectPath}/merge_requests/${prNum}`,
     { headers }
   )
   if (mr.message) throw new Error(`GitLab API: ${mr.message}`)
@@ -228,68 +260,81 @@ export async function gitlabGetPR(workspace: string, repo: string, prNum: number
   }
 }
 
-export async function gitlabPostComment(workspace: string, repo: string, prNum: number, body: string): Promise<void> {
+export async function gitlabPostComment(hostname: string, workspace: string, repo: string, prNum: number, body: string): Promise<void> {
+  const base = getApiBase('gitlab', hostname)
   const headers = getAuthHeaders('gitlab') as Record<string, string>
   const projectPath = encodeURIComponent(`${workspace}/${repo}`)
   await request(
-    `https://gitlab.com/api/v4/projects/${projectPath}/merge_requests/${prNum}/notes`,
+    `${base}/projects/${projectPath}/merge_requests/${prNum}/notes`,
     { method: 'POST', headers, body: JSON.stringify({ body }) }
   )
 }
 
 // ─── Credential Verification ────────────────────────────
 
-export async function verifyCredentials(forge: string, workspace?: string, repo?: string): Promise<void> {
+export async function verifyCredentials(forge: string, hostname?: string, workspace?: string, repo?: string): Promise<void> {
+  const host = hostname || getDefaultHostname(forge)
+
   if (forge === 'github') {
+    const base = getApiBase('github', host)
     const headers = getAuthHeaders('github') as Record<string, string>
-    const data = await request('https://api.github.com/user', { headers, timeout: 10_000 })
+    const data = await request(`${base}/user`, { headers, timeout: 10_000 })
     if (data.message) throw new Error(`GitHub: ${data.message}`)
     if (!data.login) throw new Error('GitHub: unexpected response')
   } else if (forge === 'bitbucket') {
+    const base = getApiBase('bitbucket', host)
     const { username, password } = getBitbucketAuth()
     // Verify against the PR endpoint (uses read:pullrequest scope) instead of
     // /2.0/user (which needs read:account scope that prai doesn't require)
     if (workspace && repo) {
       const data = await request(
-        `https://api.bitbucket.org/2.0/repositories/${workspace}/${repo}/pullrequests?pagelen=1`,
+        `${base}/repositories/${workspace}/${repo}/pullrequests?pagelen=1`,
         { auth: `${username}:${password}`, timeout: 10_000 }
       )
       if (data.type === 'error') throw new Error(data.error?.message || 'Bitbucket: authentication failed')
     } else {
       // No repo context — verify against workspaces endpoint
-      const data = await request('https://api.bitbucket.org/2.0/workspaces?pagelen=1', {
+      const data = await request(`${base}/workspaces?pagelen=1`, {
         auth: `${username}:${password}`,
         timeout: 10_000,
       })
       if (data.type === 'error') throw new Error(data.error?.message || 'Bitbucket: authentication failed')
     }
   } else if (forge === 'gitlab') {
+    const base = getApiBase('gitlab', host)
     const headers = getAuthHeaders('gitlab') as Record<string, string>
-    const data = await request('https://gitlab.com/api/v4/user', { headers, timeout: 10_000 })
+    const data = await request(`${base}/user`, { headers, timeout: 10_000 })
     if (data.message) throw new Error(`GitLab: ${data.message}`)
     if (!data.id) throw new Error('GitLab: unexpected response')
   }
 }
 
+function getDefaultHostname(forge: string): string {
+  if (forge === 'github') return 'github.com'
+  if (forge === 'gitlab') return 'gitlab.com'
+  if (forge === 'bitbucket') return 'bitbucket.org'
+  return ''
+}
+
 // ─── Unified API ─────────────────────────────────────────
 
-export async function listPRs(forge: string, workspace: string, repo: string): Promise<PRInfo[]> {
-  if (forge === 'github') return githubListPRs(workspace, repo)
-  if (forge === 'bitbucket') return bitbucketListPRs(workspace, repo)
-  if (forge === 'gitlab') return gitlabListPRs(workspace, repo)
+export async function listPRs(forge: string, hostname: string, workspace: string, repo: string): Promise<PRInfo[]> {
+  if (forge === 'github') return githubListPRs(hostname, workspace, repo)
+  if (forge === 'bitbucket') return bitbucketListPRs(hostname, workspace, repo)
+  if (forge === 'gitlab') return gitlabListPRs(hostname, workspace, repo)
   throw new Error(`Unsupported forge: ${forge}`)
 }
 
-export async function getPR(forge: string, workspace: string, repo: string, prNum: number): Promise<PRInfo> {
-  if (forge === 'github') return githubGetPR(workspace, repo, prNum)
-  if (forge === 'bitbucket') return bitbucketGetPR(workspace, repo, prNum)
-  if (forge === 'gitlab') return gitlabGetPR(workspace, repo, prNum)
+export async function getPR(forge: string, hostname: string, workspace: string, repo: string, prNum: number): Promise<PRInfo> {
+  if (forge === 'github') return githubGetPR(hostname, workspace, repo, prNum)
+  if (forge === 'bitbucket') return bitbucketGetPR(hostname, workspace, repo, prNum)
+  if (forge === 'gitlab') return gitlabGetPR(hostname, workspace, repo, prNum)
   throw new Error(`Unsupported forge: ${forge}`)
 }
 
-export async function postComment(forge: string, workspace: string, repo: string, prNum: number, body: string): Promise<void> {
-  if (forge === 'github') return githubPostComment(workspace, repo, prNum, body)
-  if (forge === 'bitbucket') return bitbucketPostComment(workspace, repo, prNum, body)
-  if (forge === 'gitlab') return gitlabPostComment(workspace, repo, prNum, body)
+export async function postComment(forge: string, hostname: string, workspace: string, repo: string, prNum: number, body: string): Promise<void> {
+  if (forge === 'github') return githubPostComment(hostname, workspace, repo, prNum, body)
+  if (forge === 'bitbucket') return bitbucketPostComment(hostname, workspace, repo, prNum, body)
+  if (forge === 'gitlab') return gitlabPostComment(hostname, workspace, repo, prNum, body)
   throw new Error(`Unsupported forge: ${forge}`)
 }

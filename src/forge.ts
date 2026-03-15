@@ -2,6 +2,7 @@ import { execSync } from 'child_process'
 
 export interface ForgeInfo {
   forge: 'github' | 'bitbucket' | 'gitlab'
+  hostname: string
   workspace: string
   repo: string
   remoteUrl: string
@@ -22,12 +23,15 @@ export function detectForge(): ForgeInfo {
   else throw new Error(`Unknown forge. Remote URL: ${remoteUrl}`)
 
   let pathPart: string
+  let hostname: string
   if (remoteUrl.startsWith('git@')) {
     // SSH: git@host:workspace/repo.git
+    hostname = remoteUrl.split('@')[1]?.split(':')[0] ?? ''
     pathPart = remoteUrl.split(':')[1]?.replace(/\.git$/, '') ?? ''
   } else {
     // HTTPS: https://host/workspace/repo.git
     const url = new URL(remoteUrl)
+    hostname = url.hostname
     pathPart = url.pathname.slice(1).replace(/\.git$/, '')
   }
 
@@ -45,7 +49,7 @@ export function detectForge(): ForgeInfo {
     throw new Error(`Could not parse workspace/repo from: ${remoteUrl}`)
   }
 
-  return { forge, workspace, repo, remoteUrl }
+  return { forge, hostname, workspace, repo, remoteUrl }
 }
 
 export function getCurrentBranch(): string {

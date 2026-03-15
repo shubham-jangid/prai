@@ -11,14 +11,18 @@ export async function runInit(): Promise<void> {
 
   // Detect forge from current repo (optional — user might run init outside a repo)
   let detectedForge: string | null = null
+  let detectedHostname: string | undefined
   let detectedWorkspace: string | undefined
   let detectedRepo: string | undefined
   try {
     const info = detectForge()
     detectedForge = info.forge
+    detectedHostname = info.hostname
     detectedWorkspace = info.workspace
     detectedRepo = info.repo
-    printInfo(`Detected ${info.forge} repo: ${info.workspace}/${info.repo}`)
+    const isSelfHosted = !['github.com', 'gitlab.com', 'bitbucket.org'].includes(info.hostname)
+    const hostLabel = isSelfHosted ? ` (${info.hostname})` : ''
+    printInfo(`Detected ${info.forge}${hostLabel} repo: ${info.workspace}/${info.repo}`)
     console.log()
   } catch {
     // Not in a git repo — that's fine, user can still configure
@@ -49,38 +53,45 @@ export async function runInit(): Promise<void> {
   if (!forge) return // User cancelled
 
   const existing = loadCredentials() || ({} as Credentials)
+  const hostname = forge === detectedForge ? detectedHostname : undefined
   const workspace = forge === detectedForge ? detectedWorkspace : undefined
   const repo = forge === detectedForge ? detectedRepo : undefined
 
   if (forge === 'github') {
-    await setupGithub(existing, workspace, repo)
+    await setupGithub(existing, hostname, workspace, repo)
   } else if (forge === 'bitbucket') {
-    await setupBitbucket(existing, workspace, repo)
+    await setupBitbucket(existing, hostname, workspace, repo)
   } else if (forge === 'gitlab') {
-    await setupGitlab(existing, workspace, repo)
+    await setupGitlab(existing, hostname, workspace, repo)
   }
 }
 
 // ─── GitHub ──────────────────────────────────────────────
 
-async function setupGithub(creds: Credentials, workspace?: string, repo?: string): Promise<void> {
+async function setupGithub(creds: Credentials, hostname?: string, workspace?: string, repo?: string): Promise<void> {
+  const isSelfHosted = hostname && hostname !== 'github.com'
   while (true) {
     console.log()
-    console.log(chalk.dim('  Create a token at: https://github.com/settings/tokens'))
+    if (isSelfHosted) {
+      console.log(chalk.dim(`  GitHub Enterprise: ${hostname}`))
+      console.log(chalk.dim(`  Create a token at: https://${hostname}/settings/tokens`))
+    } else {
+      console.log(chalk.dim('  Create a token at: https://github.com/settings/tokens'))
+    }
     console.log(chalk.dim('  Scope needed: repo (read)'))
     console.log()
 
     const { token } = await prompts({
       type: 'password',
       name: 'token',
-      message: 'GitHub personal access token:',
+      message: isSelfHosted ? `GitHub Enterprise (${hostname}) token:` : 'GitHub personal access token:',
       validate: (v: string) => v.length > 0 || 'Token is required',
     })
 
     if (!token) return
 
     creds.github = { token }
-    const verified = await verifyAndReport('github', creds, workspace, repo)
+    const verified = await verifyAndReport('github', creds, hostname, workspace, repo)
     if (verified) return
 
     printAuthHelp('github')
@@ -98,7 +109,7 @@ async function setupGithub(creds: Credentials, workspace?: string, repo?: string
 
 // ─── Bitbucket ───────────────────────────────────────────
 
-async function setupBitbucket(creds: Credentials, workspace?: string, repo?: string): Promise<void> {
+async function setupBitbucket(creds: Credentials, hostname?: string, workspace?: string, repo?: string): Promise<void> {
   while (true) {
     console.log()
     console.log(chalk.dim('  Create an API token at: https://id.atlassian.com/manage-profile/security/api-tokens'))
@@ -125,7 +136,7 @@ async function setupBitbucket(creds: Credentials, workspace?: string, repo?: str
     if (!api_token) return
 
     creds.bitbucket = { email, api_token }
-    const verified = await verifyAndReport('bitbucket', creds, workspace, repo)
+    const verified = await verifyAndReport('bitbucket', creds, hostname, workspace, repo)
     if (verified) return
 
     printAuthHelp('bitbucket')
@@ -143,24 +154,30 @@ async function setupBitbucket(creds: Credentials, workspace?: string, repo?: str
 
 // ─── GitLab ──────────────────────────────────────────────
 
-async function setupGitlab(creds: Credentials, workspace?: string, repo?: string): Promise<void> {
+async function setupGitlab(creds: Credentials, hostname?: string, workspace?: string, repo?: string): Promise<void> {
+  const isSelfHosted = hostname && hostname !== 'gitlab.com'
   while (true) {
     console.log()
-    console.log(chalk.dim('  Create a token at: https://gitlab.com/-/user_settings/personal_access_tokens'))
+    if (isSelfHosted) {
+      console.log(chalk.dim(`  Self-hosted GitLab: ${hostname}`))
+      console.log(chalk.dim(`  Create a token at: https://${hostname}/-/user_settings/personal_access_tokens`))
+    } else {
+      console.log(chalk.dim('  Create a token at: https://gitlab.com/-/user_settings/personal_access_tokens'))
+    }
     console.log(chalk.dim('  Scope needed: read_api'))
     console.log()
 
     const { token } = await prompts({
       type: 'password',
       name: 'token',
-      message: 'GitLab personal access token:',
+      message: isSelfHosted ? `GitLab (${hostname}) token:` : 'GitLab personal access token:',
       validate: (v: string) => v.length > 0 || 'Token is required',
     })
 
     if (!token) return
 
     creds.gitlab = { token }
-    const verified = await verifyAndReport('gitlab', creds, workspace, repo)
+    const verified = await verifyAndReport('gitlab', creds, hostname, workspace, repo)
     if (verified) return
 
     printAuthHelp('gitlab')
@@ -178,13 +195,13 @@ async function setupGitlab(creds: Credentials, workspace?: string, repo?: string
 
 // ─── Helpers ─────────────────────────────────────────────
 
-async function verifyAndReport(forge: string, creds: Credentials, workspace?: string, repo?: string): Promise<boolean> {
+async function verifyAndReport(forge: string, creds: Credentials, hostname?: string, workspace?: string, repo?: string): Promise<boolean> {
   console.log()
   const s = spinner('Verifying credentials...')
   try {
     // Temporarily save so getAuthHeaders/getBitbucketAuth can read them
     saveCredentials(creds)
-    await verifyCredentials(forge, workspace, repo)
+    await verifyCredentials(forge, hostname, workspace, repo)
     s.succeed('Credentials verified — authentication successful')
 
     const path = getCredentialsPath()

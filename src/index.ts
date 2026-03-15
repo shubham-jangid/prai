@@ -155,13 +155,15 @@ program
       let forgeInfo
       try {
         forgeInfo = detectForge()
-        forgeSpinner.succeed(`${forgeInfo.forge} — ${forgeInfo.workspace}/${forgeInfo.repo}`)
+        const isSelfHosted = !['github.com', 'gitlab.com', 'bitbucket.org'].includes(forgeInfo.hostname)
+        const hostLabel = isSelfHosted ? ` (${forgeInfo.hostname})` : ''
+        forgeSpinner.succeed(`${forgeInfo.forge}${hostLabel} — ${forgeInfo.workspace}/${forgeInfo.repo}`)
       } catch (err: any) {
         forgeSpinner.fail(err.message)
         process.exit(1)
       }
 
-      const { forge, workspace, repo } = forgeInfo
+      const { forge, hostname, workspace, repo } = forgeInfo
 
       // 2. Check credentials
       if (!hasCredentials(forge)) {
@@ -184,7 +186,7 @@ program
         const branch = getCurrentBranch()
         const prSpinner = spinner(branch ? `Finding PR for branch "${branch}"...` : 'Listing open PRs...')
 
-        const prs = await listPRs(forge, workspace, repo)
+        const prs = await listPRs(forge, hostname, workspace, repo)
 
         if (branch) {
           const match = prs.find(p => p.sourceBranch === branch)
@@ -205,7 +207,7 @@ program
       // 4. Fetch PR details
       const detailsSpinner = spinner(`Fetching PR #${prNum}...`)
       try {
-        pr = await getPR(forge, workspace, repo, prNum)
+        pr = await getPR(forge, hostname, workspace, repo, prNum)
         detailsSpinner.succeed(`PR #${pr.number}: ${pr.title}`)
       } catch (err: any) {
         detailsSpinner.fail(err.message)
@@ -412,7 +414,7 @@ program
           const postSpinner = spinner('Posting review comment...')
           try {
             const markdown = formatReviewAsMarkdown(review)
-            await postComment(forge, workspace, repo, pr.number, markdown)
+            await postComment(forge, hostname, workspace, repo, pr.number, markdown)
             postSpinner.succeed('Review posted to PR')
           } catch (err: any) {
             postSpinner.fail(`Failed to post: ${err.message}`)
@@ -427,7 +429,7 @@ program
         const postSpinner = spinner('Posting review comment...')
         try {
           const markdown = formatReviewAsMarkdown(review)
-          await postComment(forge, workspace, repo, pr.number, markdown)
+          await postComment(forge, hostname, workspace, repo, pr.number, markdown)
           postSpinner.succeed('Review posted to PR')
         } catch (err: any) {
           postSpinner.fail(`Failed to post: ${err.message}`)
@@ -459,7 +461,7 @@ program
       }
 
       const s = spinner('Fetching open PRs...')
-      const prs = await listPRs(forgeInfo.forge, forgeInfo.workspace, forgeInfo.repo)
+      const prs = await listPRs(forgeInfo.forge, forgeInfo.hostname, forgeInfo.workspace, forgeInfo.repo)
       s.succeed(`${prs.length} open PR${prs.length !== 1 ? 's' : ''}`)
       console.log()
       printPRList(prs)
@@ -500,7 +502,7 @@ program
         }
       } else {
         const branch = getCurrentBranch()
-        const prs = await listPRs(forgeInfo.forge, forgeInfo.workspace, forgeInfo.repo)
+        const prs = await listPRs(forgeInfo.forge, forgeInfo.hostname, forgeInfo.workspace, forgeInfo.repo)
         const match = branch ? prs.find(p => p.sourceBranch === branch) : null
         if (match) {
           prNum = match.number
@@ -509,7 +511,7 @@ program
         }
       }
 
-      const pr = await getPR(forgeInfo.forge, forgeInfo.workspace, forgeInfo.repo, prNum)
+      const pr = await getPR(forgeInfo.forge, forgeInfo.hostname, forgeInfo.workspace, forgeInfo.repo, prNum)
       printPRInfo(pr)
 
       try {
