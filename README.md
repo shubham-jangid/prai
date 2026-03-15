@@ -59,7 +59,7 @@ prai fixes all three:
 
 ```bash
 # Clone and install globally
-git clone https://github.com/shubham-jangid/prai
+git clone https://github.com/shubham-jangid/prai.git
 cd prai
 npm install
 npm run build

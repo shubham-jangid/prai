@@ -194,7 +194,7 @@ export function formatReviewAsMarkdown(review: ReviewResult): string {
   }
 
   lines.push('')
-  lines.push('*Reviewed by [prai](https://github.com/prai-reviews/prai)*')
+  lines.push('*Reviewed by [prai](https://github.com/shubham-jangid/prai)*')
   return lines.join('\n')
 }
 
