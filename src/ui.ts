@@ -2,7 +2,7 @@ import chalk from 'chalk'
 import boxen from 'boxen'
 import ora, { type Ora } from 'ora'
 import type { PRInfo } from './api.js'
-import type { ReviewResult, ReviewIssue } from './reviewer.js'
+import type { ReviewResult, ReviewIssue, DescribeResult } from './reviewer.js'
 
 // ─── Spinner helpers ────────────────────────────────────
 
@@ -195,5 +195,74 @@ export function formatReviewAsMarkdown(review: ReviewResult): string {
 
   lines.push('')
   lines.push('*Reviewed by [prai](https://github.com/prai-reviews/prai)*')
+  return lines.join('\n')
+}
+
+// ─── Description Output ────────────────────────────────
+
+export function printDescription(desc: DescribeResult): void {
+  console.log(chalk.bold('  Summary'))
+  console.log(`  ${desc.summary}`)
+  console.log()
+
+  if (desc.changes.length > 0) {
+    console.log(chalk.bold('  Changes'))
+    for (const change of desc.changes) {
+      console.log(`  ${chalk.cyan('•')} ${change}`)
+    }
+    console.log()
+  }
+
+  if (desc.howToTest.length > 0) {
+    console.log(chalk.bold('  How to Test'))
+    for (const step of desc.howToTest) {
+      console.log(`  ${chalk.dim('☐')} ${step}`)
+    }
+    console.log()
+  }
+
+  const { riskAssessment } = desc
+  const score = riskAssessment.complexity
+  const bar = '█'.repeat(Math.min(score, 10)) + chalk.dim('░'.repeat(10 - Math.min(score, 10)))
+  const scoreColor = score <= 3 ? chalk.green : score <= 6 ? chalk.yellow : chalk.red
+  console.log(chalk.bold('  Risk Assessment'))
+  console.log(`  Complexity  ${bar}  ${scoreColor(`${score}/10`)}`)
+  if (riskAssessment.riskAreas.length > 0) {
+    console.log(`  ${chalk.dim('risk areas')} ${riskAssessment.riskAreas.join(', ')}`)
+  }
+  console.log(`  ${chalk.dim('rollback')} ${riskAssessment.rollback}`)
+  console.log()
+}
+
+export function formatDescriptionAsMarkdown(desc: DescribeResult): string {
+  const lines: string[] = []
+
+  lines.push('## Summary')
+  lines.push(desc.summary)
+  lines.push('')
+
+  if (desc.changes.length > 0) {
+    lines.push('## Changes')
+    for (const change of desc.changes) {
+      lines.push(`- ${change}`)
+    }
+    lines.push('')
+  }
+
+  if (desc.howToTest.length > 0) {
+    lines.push('## How to Test')
+    for (const step of desc.howToTest) {
+      lines.push(`- [ ] ${step}`)
+    }
+    lines.push('')
+  }
+
+  lines.push('## Risk Assessment')
+  lines.push(`**Complexity:** ${desc.riskAssessment.complexity}/10`)
+  if (desc.riskAssessment.riskAreas.length > 0) {
+    lines.push(`**Risk areas:** ${desc.riskAssessment.riskAreas.join(', ')}`)
+  }
+  lines.push(`**Rollback:** ${desc.riskAssessment.rollback}`)
+
   return lines.join('\n')
 }

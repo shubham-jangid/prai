@@ -7,17 +7,20 @@ interface RequestOptions {
   headers?: Record<string, string>
   body?: string
   auth?: string
+  timeout?: number
 }
 
 function request(url: string, options: RequestOptions = {}): Promise<any> {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(url)
     const client = parsedUrl.protocol === 'https:' ? https : http
+    const timeoutMs = options.timeout ?? 30_000 // 30s default
 
     const reqOptions: any = {
       hostname: parsedUrl.hostname,
       path: parsedUrl.pathname + parsedUrl.search,
       method: options.method || 'GET',
+      timeout: timeoutMs,
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'prai/0.1.0',
@@ -33,12 +36,37 @@ function request(url: string, options: RequestOptions = {}): Promise<any> {
       let data = ''
       res.on('data', (chunk: Buffer) => (data += chunk.toString()))
       res.on('end', () => {
+        const statusCode = res.statusCode || 0
+
+        // Check for HTTP error status codes
+        if (statusCode === 401 || statusCode === 403) {
+          reject(new Error(`Authentication failed (HTTP ${statusCode}). Check your credentials — run: prai init`))
+          return
+        }
+        if (statusCode === 404) {
+          reject(new Error(`Not found (HTTP 404): ${parsedUrl.pathname}`))
+          return
+        }
+        if (statusCode >= 500) {
+          reject(new Error(`Server error (HTTP ${statusCode}) from ${parsedUrl.hostname}`))
+          return
+        }
+
         try {
           resolve(JSON.parse(data))
         } catch {
-          resolve(data)
+          if (statusCode >= 400) {
+            reject(new Error(`HTTP ${statusCode}: ${data.slice(0, 200)}`))
+          } else {
+            resolve(data)
+          }
         }
       })
+    })
+
+    req.on('timeout', () => {
+      req.destroy()
+      reject(new Error(`Request timed out after ${timeoutMs / 1000}s: ${parsedUrl.pathname}`))
     })
 
     req.on('error', reject)

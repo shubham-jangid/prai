@@ -4,14 +4,48 @@ import { Command } from 'commander'
 import prompts from 'prompts'
 import { detectForge, getCurrentBranch } from './forge.js'
 import { hasCredentials } from './credentials.js'
-import { createWorktree, removeWorktree, getDiff, getDiffStat, getChangedFiles } from './git.js'
+import { createWorktree, removeWorktree, getDiff, getDiffStat, getChangedFiles, getCommitLog } from './git.js'
 import { listPRs, getPR, postComment, type PRInfo } from './api.js'
-import { reviewPR } from './reviewer.js'
+import { reviewPR, describePR } from './reviewer.js'
 import {
   printBanner, printPRInfo, printPRList, printReview, printDiffStat,
   printError, printSuccess, printInfo, spinner, formatReviewAsMarkdown,
+  printDescription, formatDescriptionAsMarkdown,
 } from './ui.js'
 import { runInit } from './init.js'
+
+// ─── Global abort controller for cancellation ───────────
+
+let activeAbortController: AbortController | null = null
+let activeWorktreePR: number | null = null
+
+function cleanupAndExit(code: number = 0): void {
+  // Abort any running review
+  if (activeAbortController) {
+    activeAbortController.abort()
+    activeAbortController = null
+  }
+
+  // Clean up any active worktree
+  if (activeWorktreePR !== null) {
+    try {
+      removeWorktree(activeWorktreePR)
+    } catch { /* best effort */ }
+    activeWorktreePR = null
+  }
+
+  console.log() // newline after ^C
+  process.exit(code)
+}
+
+// Handle Ctrl+C gracefully
+process.on('SIGINT', () => cleanupAndExit(130))
+process.on('SIGTERM', () => cleanupAndExit(143))
+
+// Handle prompts cancellation (Ctrl+C during interactive prompts)
+const onPromptsCancel = () => {
+  cleanupAndExit(130)
+}
 
 const program = new Command()
 
@@ -118,6 +152,7 @@ program
         const wtSpinner = spinner('Creating worktree...')
         try {
           worktreePath = createWorktree(pr.number, pr.sourceBranch)
+          activeWorktreePR = pr.number // Track for cleanup on SIGINT
           wtSpinner.succeed(`Worktree at ${worktreePath}`)
         } catch (err: any) {
           wtSpinner.fail(`Worktree failed: ${err.message}`)
@@ -147,16 +182,24 @@ program
       printDiffStat(diffStat)
       console.log()
 
-      // 6. Run review
-      const reviewSpinner = spinner('Claude is reviewing the PR...')
+      // 6. Run review (cancellable via Ctrl+C)
+      activeAbortController = new AbortController()
+      const reviewSpinner = spinner('Claude is reviewing the PR... (press Ctrl+C to stop)')
       let review
       try {
-        review = await reviewPR(reviewDir, diff, diffStat)
+        review = await reviewPR(reviewDir, diff, diffStat, activeAbortController.signal)
         reviewSpinner.succeed('Review complete')
       } catch (err: any) {
+        if (err.message === 'Review cancelled') {
+          reviewSpinner.warn('Review cancelled by user')
+          cleanup(worktreePath, pr.number)
+          return
+        }
         reviewSpinner.fail(err.message)
         cleanup(worktreePath, pr.number)
         process.exit(1)
+      } finally {
+        activeAbortController = null
       }
 
       console.log()
@@ -178,7 +221,7 @@ program
           name: 'shouldPost',
           message: 'Post this review as a comment on the PR?',
           initial: false,
-        })
+        }, { onCancel: onPromptsCancel })
 
         if (shouldPost) {
           const postSpinner = spinner('Posting review comment...')
@@ -233,6 +276,9 @@ program
   .command('describe [prNumber]')
   .description('Generate a PR description from the diff')
   .action(async (prNumberArg: string | undefined) => {
+    let worktreePath: string | null = null
+    let prNumber: number | null = null
+
     try {
       printBanner()
       const forgeInfo = detectForge()
@@ -245,6 +291,10 @@ program
       let prNum: number
       if (prNumberArg) {
         prNum = parseInt(prNumberArg, 10)
+        if (isNaN(prNum)) {
+          printError(`Invalid PR number: ${prNumberArg}`)
+          process.exit(1)
+        }
       } else {
         const branch = getCurrentBranch()
         const prs = await listPRs(forgeInfo.forge, forgeInfo.workspace, forgeInfo.repo)
@@ -259,23 +309,61 @@ program
       const pr = await getPR(forgeInfo.forge, forgeInfo.workspace, forgeInfo.repo, prNum)
       printPRInfo(pr)
 
-      const worktreePath = createWorktree(pr.number, pr.sourceBranch)
+      worktreePath = createWorktree(pr.number, pr.sourceBranch)
+      prNumber = pr.number
+      activeWorktreePR = pr.number // Track for SIGINT cleanup
+
       const diff = getDiff(worktreePath, pr.destBranch)
       const diffStat = getDiffStat(worktreePath, pr.destBranch)
+      const commitLog = getCommitLog(worktreePath, pr.destBranch)
 
-      const s = spinner('Generating description...')
-      const review = await reviewPR(worktreePath, diff, diffStat)
-      s.succeed('Description generated')
-
-      console.log()
-      if (review.summary) {
-        console.log(review.summary)
+      if (!diff.trim()) {
+        printInfo('No diff found — nothing to describe.')
+        return
       }
 
-      removeWorktree(pr.number)
+      activeAbortController = new AbortController()
+      const s = spinner('Generating description... (press Ctrl+C to stop)')
+      const description = await describePR(worktreePath, diff, diffStat, commitLog, activeAbortController.signal)
+      s.succeed('Description generated')
+      activeAbortController = null
+
+      console.log()
+      printDescription(description)
+
+      // Ask what to do with the description
+      const { action } = await prompts({
+        type: 'select',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          { title: 'Copy as markdown', description: 'Show markdown to copy into the PR', value: 'copy' },
+          { title: 'Done', description: 'Just show the output above', value: 'done' },
+        ],
+      }, { onCancel: onPromptsCancel })
+
+      if (action === 'copy') {
+        const md = formatDescriptionAsMarkdown(description)
+        console.log()
+        console.log(md)
+        console.log()
+      }
     } catch (err: any) {
-      printError(err.message)
-      process.exit(1)
+      if (err.message === 'Review cancelled') {
+        printInfo('Description generation cancelled.')
+      } else {
+        printError(err.message)
+        process.exit(1)
+      }
+    } finally {
+      activeAbortController = null
+      // Always clean up worktree
+      if (worktreePath && prNumber !== null) {
+        try {
+          removeWorktree(prNumber)
+        } catch { /* best effort */ }
+        activeWorktreePR = null
+      }
     }
   })
 
@@ -296,7 +384,7 @@ async function interactiveSelectPR(prs: PRInfo[]): Promise<number> {
       description: `${pr.sourceBranch} -> ${pr.destBranch} (${pr.author})`,
       value: pr.number,
     })),
-  })
+  }, { onCancel: onPromptsCancel })
 
   if (selected === undefined) {
     process.exit(0)
@@ -310,6 +398,7 @@ function cleanup(worktreePath: string | null, prNumber: number): void {
     try {
       removeWorktree(prNumber)
     } catch { /* ignore cleanup errors */ }
+    activeWorktreePR = null
   }
 }
 

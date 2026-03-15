@@ -31,7 +31,16 @@ export function detectForge(): ForgeInfo {
     pathPart = url.pathname.slice(1).replace(/\.git$/, '')
   }
 
-  const [workspace, repo] = pathPart.split('/')
+  const parts = pathPart.split('/')
+  if (parts.length < 2) {
+    throw new Error(`Could not parse workspace/repo from: ${remoteUrl}`)
+  }
+
+  // Handle subgroups: git@gitlab.com:group/subgroup/repo.git
+  // workspace = everything before the last segment, repo = last segment
+  const repo = parts[parts.length - 1]
+  const workspace = parts.slice(0, -1).join('/')
+
   if (!workspace || !repo) {
     throw new Error(`Could not parse workspace/repo from: ${remoteUrl}`)
   }

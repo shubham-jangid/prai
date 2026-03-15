@@ -98,3 +98,14 @@ export function getChangedFiles(worktreePath: string, destBranch: string): strin
     return []
   }
 }
+
+export function getCommitLog(worktreePath: string, destBranch: string): string {
+  try {
+    return execSync(`git log origin/${destBranch}..HEAD --oneline`, {
+      encoding: 'utf-8',
+      cwd: worktreePath,
+    }).trim()
+  } catch {
+    return ''
+  }
+}
