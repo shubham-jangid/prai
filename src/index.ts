@@ -6,7 +6,7 @@ import { detectForge, getCurrentBranch } from './forge.js'
 import { hasCredentials, deleteCredentials, loadCredentials } from './credentials.js'
 import { createWorktree, removeWorktree, getDiff, getDiffStat, getChangedFiles, getCommitLog } from './git.js'
 import { listPRs, getPR, postComment, type PRInfo } from './api.js'
-import { reviewPR, describePR, loadTeamRules, type PromptContext } from './reviewer.js'
+import { reviewPR, describePR, loadTeamRules, type PromptContext, type FeedbackRound } from './reviewer.js'
 import {
   printBanner, printPRInfo, printPRList, printReview, printDiffStat,
   printError, printSuccess, printInfo, spinner, formatReviewAsMarkdown,
@@ -325,64 +325,90 @@ program
         deep,
       }
 
-      activeAbortController = new AbortController()
-      const reviewSpinner = spinner('Claude is reviewing the PR... (press Ctrl+C to stop)')
+      // 8. Review loop with feedback
+      const feedbackHistory: FeedbackRound[] = []
       let review
-      try {
-        const result = await reviewPR(ctx, reviewDir, activeAbortController.signal)
-        review = result.review
+      let roundNumber = 1
 
-        if (options.verbose) {
-          console.log()
-          console.log('\n── Prompt sent to Claude ──────────────────────')
-          console.log(result.prompt)
-          console.log('───────────────────────────────────────────────\n')
-        }
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const label = roundNumber === 1
+          ? 'Claude is reviewing the PR... (press Ctrl+C to stop)'
+          : `Claude is re-reviewing with your feedback (round ${roundNumber})...`
 
-        reviewSpinner.succeed('Review complete')
-      } catch (err: any) {
-        if (err.message === 'Review cancelled') {
-          reviewSpinner.warn('Review cancelled by user')
-          cleanup(worktreePath, pr.number)
-          return
-        }
-        reviewSpinner.fail(err.message)
-        cleanup(worktreePath, pr.number)
-        process.exit(1)
-      } finally {
-        activeAbortController = null
-      }
+        activeAbortController = new AbortController()
+        const reviewSpinner = spinner(label)
 
-      console.log()
-      printReview(review)
-
-      // Notify user
-      const verdict = review.critical.length > 0
-        ? 'Changes requested'
-        : review.issues.length > 0
-          ? 'Approve with comments'
-          : 'Approved'
-      notifyReviewComplete(pr.number, verdict)
-
-      // 7. Optionally post comment
-      if (options.post) {
-        const postSpinner = spinner('Posting review comment...')
         try {
-          const markdown = formatReviewAsMarkdown(review)
-          await postComment(forge, workspace, repo, pr.number, markdown)
-          postSpinner.succeed('Review posted to PR')
+          ctx.feedbackHistory = feedbackHistory.length > 0 ? feedbackHistory : undefined
+          const result = await reviewPR(ctx, reviewDir, activeAbortController.signal)
+          review = result.review
+
+          if (options.verbose) {
+            console.log()
+            console.log('\n── Prompt sent to Claude ──────────────────────')
+            console.log(result.prompt)
+            console.log('───────────────────────────────────────────────\n')
+          }
+
+          reviewSpinner.succeed(roundNumber === 1 ? 'Review complete' : `Re-review complete (round ${roundNumber})`)
         } catch (err: any) {
-          postSpinner.fail(`Failed to post: ${err.message}`)
+          if (err.message === 'Review cancelled') {
+            reviewSpinner.warn('Review cancelled by user')
+            cleanup(worktreePath, pr.number)
+            return
+          }
+          reviewSpinner.fail(err.message)
+          cleanup(worktreePath, pr.number)
+          process.exit(1)
+        } finally {
+          activeAbortController = null
         }
-      } else if (review.critical.length > 0 || review.issues.length > 0) {
-        const { shouldPost } = await prompts({
-          type: 'confirm',
-          name: 'shouldPost',
-          message: 'Post this review as a comment on the PR?',
-          initial: false,
+
+        console.log()
+        printReview(review)
+
+        // Notify user
+        const verdict = review.critical.length > 0
+          ? 'Changes requested'
+          : review.issues.length > 0
+            ? 'Approve with comments'
+            : 'Approved'
+        notifyReviewComplete(pr.number, verdict)
+
+        // Ask for feedback or proceed
+        const hasIssues = review.critical.length > 0 || review.issues.length > 0
+
+        if (!hasIssues) break // Clean review — no feedback needed
+
+        const { nextAction } = await prompts({
+          type: 'select',
+          name: 'nextAction',
+          message: 'What next?',
+          choices: [
+            { title: 'Accept review', description: 'Proceed as-is', value: 'accept' },
+            { title: 'Give feedback', description: 'Explain why an issue is incorrect or intentional', value: 'feedback' },
+            { title: 'Post to PR', description: 'Post this review as a comment', value: 'post' },
+          ],
         }, { onCancel: onPromptsCancel })
 
-        if (shouldPost) {
+        if (nextAction === 'feedback') {
+          const { feedback } = await prompts({
+            type: 'text',
+            name: 'feedback',
+            message: 'Your feedback (explain which issues are incorrect and why):',
+            validate: (v: string) => v.trim().length > 0 || 'Feedback cannot be empty',
+          }, { onCancel: onPromptsCancel })
+
+          if (feedback && feedback.trim()) {
+            feedbackHistory.push({ previousReview: review, feedback: feedback.trim() })
+            roundNumber++
+            console.log()
+            continue // Re-run review with feedback
+          }
+        }
+
+        if (nextAction === 'post') {
           const postSpinner = spinner('Posting review comment...')
           try {
             const markdown = formatReviewAsMarkdown(review)
@@ -391,6 +417,20 @@ program
           } catch (err: any) {
             postSpinner.fail(`Failed to post: ${err.message}`)
           }
+        }
+
+        break // accept or post — exit loop
+      }
+
+      // Auto-post if --post flag was given and we haven't posted yet
+      if (options.post && review) {
+        const postSpinner = spinner('Posting review comment...')
+        try {
+          const markdown = formatReviewAsMarkdown(review)
+          await postComment(forge, workspace, repo, pr.number, markdown)
+          postSpinner.succeed('Review posted to PR')
+        } catch (err: any) {
+          postSpinner.fail(`Failed to post: ${err.message}`)
         }
       }
 

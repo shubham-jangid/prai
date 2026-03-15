@@ -39,6 +39,11 @@ export interface TeamRules {
   customInstructions?: string
 }
 
+export interface FeedbackRound {
+  previousReview: ReviewResult
+  feedback: string
+}
+
 export interface PromptContext {
   diff: string
   diffStat: string
@@ -50,6 +55,7 @@ export interface PromptContext {
   prompt?: string
   deep?: boolean
   diffLines: number
+  feedbackHistory?: FeedbackRound[]
 }
 
 // ─── Diff truncation ────────────────────────────────────
@@ -335,6 +341,50 @@ function customPromptSegment(prompt?: string): string {
   return `ADDITIONAL INSTRUCTIONS:\n${trimmed}`
 }
 
+function feedbackSegment(feedbackHistory?: FeedbackRound[]): string {
+  if (!feedbackHistory || feedbackHistory.length === 0) return ''
+
+  const parts: string[] = []
+  parts.push('PREVIOUS REVIEW FEEDBACK:')
+  parts.push('The author has reviewed your previous findings and provided feedback.')
+  parts.push('Re-evaluate your review considering this feedback. Drop issues the author has')
+  parts.push('justified. Keep issues where the justification is insufficient. You may add new')
+  parts.push('issues if the feedback reveals additional concerns.')
+  parts.push('')
+
+  for (let i = 0; i < feedbackHistory.length; i++) {
+    const round = feedbackHistory[i]
+    const roundLabel = feedbackHistory.length > 1 ? ` (round ${i + 1})` : ''
+
+    parts.push(`── Your previous findings${roundLabel} ──`)
+
+    if (round.previousReview.critical.length > 0) {
+      parts.push('Critical issues you found:')
+      for (const issue of round.previousReview.critical) {
+        parts.push(`  - [${issue.file}:${issue.line}] ${issue.message}`)
+      }
+    }
+    if (round.previousReview.issues.length > 0) {
+      parts.push('Warnings you found:')
+      for (const issue of round.previousReview.issues) {
+        parts.push(`  - [${issue.file}:${issue.line}] ${issue.message}`)
+      }
+    }
+    parts.push(`Previous summary: ${round.previousReview.summary}`)
+    parts.push('')
+    parts.push(`── Author feedback${roundLabel} ──`)
+    parts.push(round.feedback)
+    parts.push('')
+  }
+
+  parts.push('INSTRUCTIONS: Produce a NEW complete review JSON incorporating the feedback.')
+  parts.push('Remove issues the author has adequately justified. Keep issues where the')
+  parts.push('justification is weak or the risk remains. Update the summary to reflect')
+  parts.push('the refined assessment.')
+
+  return parts.join('\n')
+}
+
 function adaptiveHintsSegment(diffLines: number): string {
   if (diffLines < 100) {
     return `REVIEW DEPTH:
@@ -387,6 +437,7 @@ export function buildReviewPrompt(ctx: PromptContext): string {
     focusSegment(ctx.focus),
     contextSegment(ctx.context),
     customPromptSegment(ctx.prompt),
+    feedbackSegment(ctx.feedbackHistory),
     adaptiveHintsSegment(ctx.diffLines),
     diffSegment(safeDiff, ctx.diffStat, truncated, totalLines),
   ]
