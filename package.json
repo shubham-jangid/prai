@@ -17,7 +17,6 @@
     "commander": "^12.1.0",
     "ora": "^8.0.1",
     "prompts": "^2.4.2",
-    "simple-git": "^3.25.0",
     "yaml": "^2.8.2"
   },
   "devDependencies": {

@@ -1,7 +1,7 @@
 import chalk from 'chalk'
 import boxen from 'boxen'
 import ora, { type Ora } from 'ora'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import type { PRInfo } from './api.js'
 import type { ReviewResult, ReviewIssue, DescribeResult } from './reviewer.js'
 
@@ -268,12 +268,11 @@ export function notifyReviewComplete(prNumber: number, verdict: string): void {
 
   try {
     if (process.platform === 'darwin') {
-      execSync(
-        `osascript -e 'display notification "${message}" with title "${title}" sound name "Glass"'`,
-        { stdio: 'pipe' }
-      )
+      execFileSync('osascript', ['-e', `display notification "${message}" with title "${title}" sound name "Glass"`], {
+        stdio: 'pipe',
+      })
     } else if (process.platform === 'linux') {
-      execSync(`notify-send "${title}" "${message}" 2>/dev/null`, { stdio: 'pipe' })
+      execFileSync('notify-send', [title, message], { stdio: 'pipe' })
     }
     // Windows: terminal bell is sufficient
   } catch { /* notification is best-effort */ }

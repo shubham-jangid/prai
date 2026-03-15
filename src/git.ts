@@ -1,4 +1,4 @@
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { existsSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 
@@ -20,12 +20,12 @@ export function createWorktree(prNumber: number, branch: string): string {
   const worktreePath = `/tmp/prai-review-${prNumber}`
 
   // Always prune stale worktree entries first
-  try { execSync('git worktree prune', { stdio: 'pipe' }) } catch { /* ignore */ }
+  try { execFileSync('git', ['worktree', 'prune'], { stdio: 'pipe' }) } catch { /* ignore */ }
 
   // Clean up existing worktree if it exists
   if (existsSync(worktreePath)) {
     try {
-      execSync(`git worktree remove "${worktreePath}" --force`, {
+      execFileSync('git', ['worktree', 'remove', worktreePath, '--force'], {
         encoding: 'utf-8',
         stdio: 'pipe',
       })
@@ -34,7 +34,7 @@ export function createWorktree(prNumber: number, branch: string): string {
       try {
         rmSync(worktreePath, { recursive: true, force: true })
       } catch { /* ignore */ }
-      try { execSync('git worktree prune', { stdio: 'pipe' }) } catch { /* ignore */ }
+      try { execFileSync('git', ['worktree', 'prune'], { stdio: 'pipe' }) } catch { /* ignore */ }
     }
 
     // If it STILL exists after all cleanup attempts, fail explicitly
@@ -48,14 +48,17 @@ export function createWorktree(prNumber: number, branch: string): string {
 
   // Fetch the branch
   try {
-    execSync(`git fetch origin "${branch}" --quiet`, { encoding: 'utf-8', stdio: 'pipe' })
+    execFileSync('git', ['fetch', 'origin', branch, '--quiet'], {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    })
   } catch {
     throw new Error(`Failed to fetch branch: ${branch}`)
   }
 
   // Create worktree
   try {
-    execSync(`git worktree add "${worktreePath}" "origin/${branch}" --quiet`, {
+    execFileSync('git', ['worktree', 'add', worktreePath, `origin/${branch}`, '--quiet'], {
       encoding: 'utf-8',
       stdio: 'pipe',
     })
@@ -68,11 +71,11 @@ export function createWorktree(prNumber: number, branch: string): string {
 
     // First attempt may leave a partial directory — clean it before retry
     try { rmSync(worktreePath, { recursive: true, force: true }) } catch { /* ignore */ }
-    try { execSync('git worktree prune', { stdio: 'pipe' }) } catch { /* ignore */ }
+    try { execFileSync('git', ['worktree', 'prune'], { stdio: 'pipe' }) } catch { /* ignore */ }
 
     // Try detached HEAD if branch conflicts
     try {
-      execSync(`git worktree add --detach "${worktreePath}" "origin/${branch}" --quiet`, {
+      execFileSync('git', ['worktree', 'add', '--detach', worktreePath, `origin/${branch}`, '--quiet'], {
         encoding: 'utf-8',
         stdio: 'pipe',
       })
@@ -80,7 +83,7 @@ export function createWorktree(prNumber: number, branch: string): string {
       // Same hook issue — check if worktree was actually created
       if (!isValidWorktree(worktreePath)) {
         throw new Error(
-          `Command failed: git worktree add --detach "${worktreePath}" "origin/${branch}" --quiet`
+          `Failed to create worktree for origin/${branch} at ${worktreePath}`
         )
       }
     }
@@ -92,25 +95,25 @@ export function createWorktree(prNumber: number, branch: string): string {
 export function removeWorktree(prNumber: number): void {
   const worktreePath = `/tmp/prai-review-${prNumber}`
   try {
-    execSync(`git worktree remove "${worktreePath}" --force`, { stdio: 'pipe' })
+    execFileSync('git', ['worktree', 'remove', worktreePath, '--force'], { stdio: 'pipe' })
   } catch {
     try {
-      execSync(`rm -rf "${worktreePath}"`, { stdio: 'pipe' })
-      execSync('git worktree prune', { stdio: 'pipe' })
+      rmSync(worktreePath, { recursive: true, force: true })
+      execFileSync('git', ['worktree', 'prune'], { stdio: 'pipe' })
     } catch { /* ignore */ }
   }
 }
 
 export function getDiff(worktreePath: string, destBranch: string): string {
   try {
-    return execSync(`git diff origin/${destBranch}...HEAD`, {
+    return execFileSync('git', ['diff', `origin/${destBranch}...HEAD`], {
       encoding: 'utf-8',
       cwd: worktreePath,
       maxBuffer: 10 * 1024 * 1024, // 10MB
     })
   } catch {
     // Fallback: diff against the destination branch directly
-    return execSync(`git diff origin/${destBranch}`, {
+    return execFileSync('git', ['diff', `origin/${destBranch}`], {
       encoding: 'utf-8',
       cwd: worktreePath,
       maxBuffer: 10 * 1024 * 1024,
@@ -120,12 +123,12 @@ export function getDiff(worktreePath: string, destBranch: string): string {
 
 export function getDiffStat(worktreePath: string, destBranch: string): string {
   try {
-    return execSync(`git diff origin/${destBranch}...HEAD --stat`, {
+    return execFileSync('git', ['diff', `origin/${destBranch}...HEAD`, '--stat'], {
       encoding: 'utf-8',
       cwd: worktreePath,
     })
   } catch {
-    return execSync(`git diff origin/${destBranch} --stat`, {
+    return execFileSync('git', ['diff', `origin/${destBranch}`, '--stat'], {
       encoding: 'utf-8',
       cwd: worktreePath,
     })
@@ -134,7 +137,7 @@ export function getDiffStat(worktreePath: string, destBranch: string): string {
 
 export function getChangedFiles(worktreePath: string, destBranch: string): string[] {
   try {
-    const output = execSync(`git diff origin/${destBranch}...HEAD --name-only`, {
+    const output = execFileSync('git', ['diff', `origin/${destBranch}...HEAD`, '--name-only'], {
       encoding: 'utf-8',
       cwd: worktreePath,
     })
@@ -146,7 +149,7 @@ export function getChangedFiles(worktreePath: string, destBranch: string): strin
 
 export function getCommitLog(worktreePath: string, destBranch: string): string {
   try {
-    return execSync(`git log origin/${destBranch}..HEAD --oneline`, {
+    return execFileSync('git', ['log', `origin/${destBranch}..HEAD`, '--oneline'], {
       encoding: 'utf-8',
       cwd: worktreePath,
     }).trim()
