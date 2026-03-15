@@ -1,5 +1,6 @@
 <p align="center">
   <h1 align="center">prai</h1>
+  <p align="center"><em>PR + AI = prai</em></p>
   <p align="center">
     <strong>AI code reviews from your terminal. Free. Local-first. Multi-forge.</strong>
   </p>
