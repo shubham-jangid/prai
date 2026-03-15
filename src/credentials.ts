@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
@@ -39,9 +39,39 @@ export function loadCredentials(): Credentials | null {
 }
 
 export function saveCredentials(creds: Credentials): void {
-  mkdirSync(CREDS_DIR, { recursive: true })
+  mkdirSync(CREDS_DIR, { recursive: true, mode: 0o700 })
+  chmodSync(CREDS_DIR, 0o700) // Ensure dir is owner-only even if it existed
   writeFileSync(CREDS_FILE, JSON.stringify(creds, null, 2))
-  chmodSync(CREDS_FILE, 0o600)
+  chmodSync(CREDS_FILE, 0o600) // Owner read/write only
+}
+
+export function deleteCredentials(forge?: string): boolean {
+  const creds = loadCredentials()
+  if (!creds) return false
+
+  if (forge) {
+    // Delete specific forge credentials
+    if (forge === 'github') delete creds.github
+    else if (forge === 'bitbucket') delete creds.bitbucket
+    else if (forge === 'gitlab') delete creds.gitlab
+    else return false
+
+    // If all forges removed, delete the file
+    if (!creds.github && !creds.bitbucket && !creds.gitlab) {
+      try { unlinkSync(CREDS_FILE) } catch { /* ignore */ }
+      return true
+    }
+    saveCredentials(creds)
+    return true
+  }
+
+  // Delete all credentials
+  try { unlinkSync(CREDS_FILE) } catch { /* ignore */ }
+  return true
+}
+
+export function getCredentialsPath(): string {
+  return CREDS_FILE
 }
 
 export function hasCredentials(forge: string): boolean {

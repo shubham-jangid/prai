@@ -230,6 +230,40 @@ export async function gitlabPostComment(workspace: string, repo: string, prNum: 
   )
 }
 
+// ─── Credential Verification ────────────────────────────
+
+export async function verifyCredentials(forge: string, workspace?: string, repo?: string): Promise<void> {
+  if (forge === 'github') {
+    const headers = getAuthHeaders('github') as Record<string, string>
+    const data = await request('https://api.github.com/user', { headers, timeout: 10_000 })
+    if (data.message) throw new Error(`GitHub: ${data.message}`)
+    if (!data.login) throw new Error('GitHub: unexpected response')
+  } else if (forge === 'bitbucket') {
+    const { username, password } = getBitbucketAuth()
+    // Verify against the PR endpoint (uses read:pullrequest scope) instead of
+    // /2.0/user (which needs read:account scope that prai doesn't require)
+    if (workspace && repo) {
+      const data = await request(
+        `https://api.bitbucket.org/2.0/repositories/${workspace}/${repo}/pullrequests?pagelen=1`,
+        { auth: `${username}:${password}`, timeout: 10_000 }
+      )
+      if (data.type === 'error') throw new Error(data.error?.message || 'Bitbucket: authentication failed')
+    } else {
+      // No repo context — verify against workspaces endpoint
+      const data = await request('https://api.bitbucket.org/2.0/workspaces?pagelen=1', {
+        auth: `${username}:${password}`,
+        timeout: 10_000,
+      })
+      if (data.type === 'error') throw new Error(data.error?.message || 'Bitbucket: authentication failed')
+    }
+  } else if (forge === 'gitlab') {
+    const headers = getAuthHeaders('gitlab') as Record<string, string>
+    const data = await request('https://gitlab.com/api/v4/user', { headers, timeout: 10_000 })
+    if (data.message) throw new Error(`GitLab: ${data.message}`)
+    if (!data.id) throw new Error('GitLab: unexpected response')
+  }
+}
+
 // ─── Unified API ─────────────────────────────────────────
 
 export async function listPRs(forge: string, workspace: string, repo: string): Promise<PRInfo[]> {

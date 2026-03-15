@@ -78,13 +78,15 @@ prai init
 
 It will auto-detect your forge from the git remote and guide you through authentication:
 
-| Forge     | What you need                                                             |
-| --------- | ------------------------------------------------------------------------- |
-| GitHub    | Personal access token with `repo` scope                                   |
-| Bitbucket | Atlassian email + API token (Repositories Read, Pull requests Read/Write) |
-| GitLab    | Personal access token with `api` scope                                    |
+| Forge     | What you need                                                                     |
+| --------- | --------------------------------------------------------------------------------- |
+| GitHub    | Personal access token with `repo` scope                                           |
+| Bitbucket | Atlassian email + [API token with scopes](https://id.atlassian.com/manage-profile/security/api-tokens) (`read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`) |
+| GitLab    | Personal access token with `api` scope                                            |
 
-Credentials are stored in `~/.prai/credentials.json` with `600` permissions.
+Credentials are verified immediately during setup — you'll know right away if something's wrong.
+
+Credentials are stored in `~/.prai/credentials.json` with `600` permissions (owner read/write only). The `~/.prai/` directory is set to `700`. Your credentials never leave your machine.
 
 ## Usage
 
@@ -148,6 +150,14 @@ prai list
 ```
 
 Shows all open PRs with number, title, branch, and author.
+
+### Delete credentials
+
+```bash
+prai logout
+```
+
+Lets you delete stored credentials — pick a specific forge or remove all. Asks for confirmation before deleting.
 
 ## Team rules
 

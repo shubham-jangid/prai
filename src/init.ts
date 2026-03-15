@@ -1,8 +1,9 @@
 import prompts from 'prompts'
 import chalk from 'chalk'
-import { loadCredentials, saveCredentials, type Credentials } from './credentials.js'
+import { loadCredentials, saveCredentials, getCredentialsPath, type Credentials } from './credentials.js'
 import { detectForge } from './forge.js'
-import { printBanner, printSuccess, printError, printInfo } from './ui.js'
+import { verifyCredentials } from './api.js'
+import { printBanner, printSuccess, printError, printInfo, spinner } from './ui.js'
 
 export async function runInit(): Promise<void> {
   printBanner()
@@ -10,9 +11,13 @@ export async function runInit(): Promise<void> {
 
   // Detect forge from current repo (optional — user might run init outside a repo)
   let detectedForge: string | null = null
+  let detectedWorkspace: string | undefined
+  let detectedRepo: string | undefined
   try {
     const info = detectForge()
     detectedForge = info.forge
+    detectedWorkspace = info.workspace
+    detectedRepo = info.repo
     printInfo(`Detected ${info.forge} repo: ${info.workspace}/${info.repo}`)
     console.log()
   } catch {
@@ -44,98 +49,186 @@ export async function runInit(): Promise<void> {
   if (!forge) return // User cancelled
 
   const existing = loadCredentials() || ({} as Credentials)
+  const workspace = forge === detectedForge ? detectedWorkspace : undefined
+  const repo = forge === detectedForge ? detectedRepo : undefined
 
   if (forge === 'github') {
-    await setupGithub(existing)
+    await setupGithub(existing, workspace, repo)
   } else if (forge === 'bitbucket') {
-    await setupBitbucket(existing)
+    await setupBitbucket(existing, workspace, repo)
   } else if (forge === 'gitlab') {
-    await setupGitlab(existing)
+    await setupGitlab(existing, workspace, repo)
   }
+}
 
-  // Check Claude Code CLI
+// ─── GitHub ──────────────────────────────────────────────
+
+async function setupGithub(creds: Credentials, workspace?: string, repo?: string): Promise<void> {
+  while (true) {
+    console.log()
+    console.log(chalk.dim('  Create a token at: https://github.com/settings/tokens'))
+    console.log(chalk.dim('  Scope needed: repo (read)'))
+    console.log()
+
+    const { token } = await prompts({
+      type: 'password',
+      name: 'token',
+      message: 'GitHub personal access token:',
+      validate: (v: string) => v.length > 0 || 'Token is required',
+    })
+
+    if (!token) return
+
+    creds.github = { token }
+    const verified = await verifyAndReport('github', creds, workspace, repo)
+    if (verified) return
+
+    printAuthHelp('github')
+
+    const { retry } = await prompts({
+      type: 'confirm',
+      name: 'retry',
+      message: 'Try again with a different token?',
+      initial: true,
+    })
+
+    if (!retry) return
+  }
+}
+
+// ─── Bitbucket ───────────────────────────────────────────
+
+async function setupBitbucket(creds: Credentials, workspace?: string, repo?: string): Promise<void> {
+  while (true) {
+    console.log()
+    console.log(chalk.dim('  Create an API token at: https://id.atlassian.com/manage-profile/security/api-tokens'))
+    console.log(chalk.dim('  Click "Create API token with scopes"'))
+    console.log(chalk.dim('  Required scopes: read:pullrequest:bitbucket, write:pullrequest:bitbucket'))
+    console.log()
+
+    const { email } = await prompts({
+      type: 'text',
+      name: 'email',
+      message: 'Atlassian email:',
+      validate: (v: string) => v.includes('@') || 'Enter a valid email',
+    })
+
+    if (!email) return
+
+    const { api_token } = await prompts({
+      type: 'password',
+      name: 'api_token',
+      message: 'Atlassian API token:',
+      validate: (v: string) => v.length > 0 || 'Token is required',
+    })
+
+    if (!api_token) return
+
+    creds.bitbucket = { email, api_token }
+    const verified = await verifyAndReport('bitbucket', creds, workspace, repo)
+    if (verified) return
+
+    printAuthHelp('bitbucket')
+
+    const { retry } = await prompts({
+      type: 'confirm',
+      name: 'retry',
+      message: 'Try again with different credentials?',
+      initial: true,
+    })
+
+    if (!retry) return
+  }
+}
+
+// ─── GitLab ──────────────────────────────────────────────
+
+async function setupGitlab(creds: Credentials, workspace?: string, repo?: string): Promise<void> {
+  while (true) {
+    console.log()
+    console.log(chalk.dim('  Create a token at: https://gitlab.com/-/user_settings/personal_access_tokens'))
+    console.log(chalk.dim('  Scope needed: read_api'))
+    console.log()
+
+    const { token } = await prompts({
+      type: 'password',
+      name: 'token',
+      message: 'GitLab personal access token:',
+      validate: (v: string) => v.length > 0 || 'Token is required',
+    })
+
+    if (!token) return
+
+    creds.gitlab = { token }
+    const verified = await verifyAndReport('gitlab', creds, workspace, repo)
+    if (verified) return
+
+    printAuthHelp('gitlab')
+
+    const { retry } = await prompts({
+      type: 'confirm',
+      name: 'retry',
+      message: 'Try again with a different token?',
+      initial: true,
+    })
+
+    if (!retry) return
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────
+
+async function verifyAndReport(forge: string, creds: Credentials, workspace?: string, repo?: string): Promise<boolean> {
   console.log()
-  printInfo('Checking Claude Code CLI...')
+  const s = spinner('Verifying credentials...')
   try {
-    const { execSync } = await import('child_process')
-    execSync('which claude', { stdio: 'pipe' })
-    printSuccess('Claude Code CLI found')
-  } catch {
-    console.log(chalk.yellow('  Claude Code CLI not found.'))
-    console.log(chalk.yellow('  Install from: https://claude.ai/download'))
-    console.log(chalk.yellow('  Then run: claude login'))
+    // Temporarily save so getAuthHeaders/getBitbucketAuth can read them
+    saveCredentials(creds)
+    await verifyCredentials(forge, workspace, repo)
+    s.succeed('Credentials verified — authentication successful')
+
+    const path = getCredentialsPath()
+    console.log(chalk.dim(`  Saved to ${path} (owner read/write only)`))
+    console.log(chalk.dim(`  Your credentials never leave your machine`))
+    console.log()
+    printSuccess('Setup complete! Run `prai review` in any repo to review a PR.')
+    return true
+  } catch (err: any) {
+    s.fail(`Authentication failed: ${err.message}`)
+    // Remove the bad credentials we just saved
+    deleteForgeCreds(forge, creds)
+    saveCredentials(creds)
+    return false
   }
-
-  console.log()
-  printSuccess('Setup complete! Run `prai review` in any repo to review a PR.')
 }
 
-async function setupGithub(creds: Credentials): Promise<void> {
-  console.log()
-  console.log(chalk.dim('  Create a token at: https://github.com/settings/tokens'))
-  console.log(chalk.dim('  Scope needed: repo (read)'))
-  console.log()
-
-  const { token } = await prompts({
-    type: 'password',
-    name: 'token',
-    message: 'GitHub personal access token:',
-    validate: (v: string) => v.length > 0 || 'Token is required',
-  })
-
-  if (!token) return
-
-  creds.github = { token }
-  saveCredentials(creds)
-  printSuccess('GitHub credentials saved to ~/.prai/credentials.json')
+function deleteForgeCreds(forge: string, creds: Credentials): void {
+  if (forge === 'github') delete creds.github
+  else if (forge === 'bitbucket') delete creds.bitbucket
+  else if (forge === 'gitlab') delete creds.gitlab
 }
 
-async function setupBitbucket(creds: Credentials): Promise<void> {
+function printAuthHelp(forge: string): void {
   console.log()
-  console.log(chalk.dim('  Create an API token at: https://bitbucket.org/account/settings/api-tokens/'))
-  console.log(chalk.dim('  (NOT from id.atlassian.com — must be Bitbucket settings page)'))
-  console.log(chalk.dim('  Scopes: Repositories (Read), Pull requests (Read, Write)'))
+  if (forge === 'github') {
+    console.log(chalk.yellow('  How to fix:'))
+    console.log(chalk.yellow('  1. Go to https://github.com/settings/tokens'))
+    console.log(chalk.yellow('  2. Click "Generate new token" (classic)'))
+    console.log(chalk.yellow('  3. Select the "repo" scope'))
+    console.log(chalk.yellow('  4. Copy the token and paste it here'))
+  } else if (forge === 'bitbucket') {
+    console.log(chalk.yellow('  How to fix:'))
+    console.log(chalk.yellow('  1. Go to https://id.atlassian.com/manage-profile/security/api-tokens'))
+    console.log(chalk.yellow('  2. Click "Create API token with scopes"'))
+    console.log(chalk.yellow('  3. Select scopes: read:pullrequest:bitbucket, write:pullrequest:bitbucket'))
+    console.log(chalk.yellow('  4. Select a workspace when prompted'))
+    console.log(chalk.yellow('  5. Copy the token and paste it here'))
+    console.log(chalk.yellow('  6. Make sure the email matches your Atlassian account'))
+  } else if (forge === 'gitlab') {
+    console.log(chalk.yellow('  How to fix:'))
+    console.log(chalk.yellow('  1. Go to https://gitlab.com/-/user_settings/personal_access_tokens'))
+    console.log(chalk.yellow('  2. Create a new token with "read_api" scope'))
+    console.log(chalk.yellow('  3. Copy the token and paste it here'))
+  }
   console.log()
-
-  const { email } = await prompts({
-    type: 'text',
-    name: 'email',
-    message: 'Atlassian email:',
-    validate: (v: string) => v.includes('@') || 'Enter a valid email',
-  })
-
-  if (!email) return
-
-  const { api_token } = await prompts({
-    type: 'password',
-    name: 'api_token',
-    message: 'Bitbucket API token:',
-    validate: (v: string) => v.length > 0 || 'Token is required',
-  })
-
-  if (!api_token) return
-
-  creds.bitbucket = { email, api_token }
-  saveCredentials(creds)
-  printSuccess('Bitbucket credentials saved to ~/.prai/credentials.json')
-}
-
-async function setupGitlab(creds: Credentials): Promise<void> {
-  console.log()
-  console.log(chalk.dim('  Create a token at: https://gitlab.com/-/user_settings/personal_access_tokens'))
-  console.log(chalk.dim('  Scope needed: read_api'))
-  console.log()
-
-  const { token } = await prompts({
-    type: 'password',
-    name: 'token',
-    message: 'GitLab personal access token:',
-    validate: (v: string) => v.length > 0 || 'Token is required',
-  })
-
-  if (!token) return
-
-  creds.gitlab = { token }
-  saveCredentials(creds)
-  printSuccess('GitLab credentials saved to ~/.prai/credentials.json')
 }

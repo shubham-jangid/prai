@@ -1,8 +1,26 @@
 import { execSync } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, rmSync, statSync } from 'fs'
+import { join } from 'path'
+
+/**
+ * Check if a worktree was successfully created despite a non-zero exit code
+ * (e.g. husky post-checkout hook failures). A valid worktree has a .git file
+ * (not directory) that points back to the main repo.
+ */
+function isValidWorktree(worktreePath: string): boolean {
+  try {
+    const gitPath = join(worktreePath, '.git')
+    return existsSync(gitPath) && statSync(gitPath).isFile()
+  } catch {
+    return false
+  }
+}
 
 export function createWorktree(prNumber: number, branch: string): string {
   const worktreePath = `/tmp/prai-review-${prNumber}`
+
+  // Always prune stale worktree entries first
+  try { execSync('git worktree prune', { stdio: 'pipe' }) } catch { /* ignore */ }
 
   // Clean up existing worktree if it exists
   if (existsSync(worktreePath)) {
@@ -12,11 +30,19 @@ export function createWorktree(prNumber: number, branch: string): string {
         stdio: 'pipe',
       })
     } catch {
-      // If worktree remove fails, try manual cleanup
-      execSync(`rm -rf "${worktreePath}"`, { stdio: 'pipe' })
+      // git worktree remove failed — force delete the directory
       try {
-        execSync('git worktree prune', { stdio: 'pipe' })
+        rmSync(worktreePath, { recursive: true, force: true })
       } catch { /* ignore */ }
+      try { execSync('git worktree prune', { stdio: 'pipe' }) } catch { /* ignore */ }
+    }
+
+    // If it STILL exists after all cleanup attempts, fail explicitly
+    if (existsSync(worktreePath)) {
+      throw new Error(
+        `Could not clean up existing worktree at ${worktreePath}\n` +
+        `  Try manually: rm -rf ${worktreePath} && git worktree prune`
+      )
     }
   }
 
@@ -34,11 +60,30 @@ export function createWorktree(prNumber: number, branch: string): string {
       stdio: 'pipe',
     })
   } catch {
+    // git worktree add can "fail" due to post-checkout hooks (e.g. husky)
+    // even though the worktree was created successfully. Check before retrying.
+    if (isValidWorktree(worktreePath)) {
+      return worktreePath
+    }
+
+    // First attempt may leave a partial directory — clean it before retry
+    try { rmSync(worktreePath, { recursive: true, force: true }) } catch { /* ignore */ }
+    try { execSync('git worktree prune', { stdio: 'pipe' }) } catch { /* ignore */ }
+
     // Try detached HEAD if branch conflicts
-    execSync(`git worktree add --detach "${worktreePath}" "origin/${branch}" --quiet`, {
-      encoding: 'utf-8',
-      stdio: 'pipe',
-    })
+    try {
+      execSync(`git worktree add --detach "${worktreePath}" "origin/${branch}" --quiet`, {
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      })
+    } catch {
+      // Same hook issue — check if worktree was actually created
+      if (!isValidWorktree(worktreePath)) {
+        throw new Error(
+          `Command failed: git worktree add --detach "${worktreePath}" "origin/${branch}" --quiet`
+        )
+      }
+    }
   }
 
   return worktreePath

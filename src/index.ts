@@ -3,14 +3,14 @@
 import { Command } from 'commander'
 import prompts from 'prompts'
 import { detectForge, getCurrentBranch } from './forge.js'
-import { hasCredentials } from './credentials.js'
+import { hasCredentials, deleteCredentials, loadCredentials } from './credentials.js'
 import { createWorktree, removeWorktree, getDiff, getDiffStat, getChangedFiles, getCommitLog } from './git.js'
 import { listPRs, getPR, postComment, type PRInfo } from './api.js'
 import { reviewPR, describePR } from './reviewer.js'
 import {
   printBanner, printPRInfo, printPRList, printReview, printDiffStat,
   printError, printSuccess, printInfo, spinner, formatReviewAsMarkdown,
-  printDescription, formatDescriptionAsMarkdown,
+  printDescription, formatDescriptionAsMarkdown, notifyReviewComplete,
 } from './ui.js'
 import { runInit } from './init.js'
 
@@ -62,6 +62,72 @@ program
   .action(async () => {
     try {
       await runInit()
+    } catch (err: any) {
+      printError(err.message)
+      process.exit(1)
+    }
+  })
+
+// ─── prai logout ─────────────────────────────────────────
+
+program
+  .command('logout')
+  .description('Delete stored credentials')
+  .action(async () => {
+    try {
+      printBanner()
+
+      const creds = loadCredentials()
+      if (!creds) {
+        printInfo('No credentials found — nothing to delete.')
+        return
+      }
+
+      // Show what's stored
+      const stored: string[] = []
+      if (creds.github) stored.push('GitHub')
+      if (creds.bitbucket) stored.push('Bitbucket')
+      if (creds.gitlab) stored.push('GitLab')
+
+      if (stored.length === 0) {
+        printInfo('No credentials found — nothing to delete.')
+        return
+      }
+
+      const choices = [
+        ...stored.map(name => ({ title: name, value: name.toLowerCase() })),
+        { title: 'All credentials', value: 'all' },
+      ]
+
+      const { target } = await prompts({
+        type: 'select',
+        name: 'target',
+        message: `Stored credentials: ${stored.join(', ')}. Which to delete?`,
+        choices,
+      }, { onCancel: onPromptsCancel })
+
+      if (!target) return
+
+      const { confirm } = await prompts({
+        type: 'confirm',
+        name: 'confirm',
+        message: target === 'all'
+          ? 'Delete ALL stored credentials?'
+          : `Delete ${target} credentials?`,
+        initial: false,
+      }, { onCancel: onPromptsCancel })
+
+      if (!confirm) {
+        printInfo('Cancelled — credentials unchanged.')
+        return
+      }
+
+      const forge = target === 'all' ? undefined : target
+      deleteCredentials(forge)
+      printSuccess(target === 'all'
+        ? 'All credentials deleted.'
+        : `${target.charAt(0).toUpperCase() + target.slice(1)} credentials deleted.`
+      )
     } catch (err: any) {
       printError(err.message)
       process.exit(1)
@@ -154,9 +220,33 @@ program
           worktreePath = createWorktree(pr.number, pr.sourceBranch)
           activeWorktreePR = pr.number // Track for cleanup on SIGINT
           wtSpinner.succeed(`Worktree at ${worktreePath}`)
-        } catch (err: any) {
-          wtSpinner.fail(`Worktree failed: ${err.message}`)
-          printInfo('Falling back to current directory')
+        } catch (firstErr: any) {
+          // Auto-cleanup and retry once before giving up
+          wtSpinner.text = 'Cleaning up stale worktree and retrying...'
+          try {
+            removeWorktree(pr.number)
+          } catch { /* best effort */ }
+
+          try {
+            worktreePath = createWorktree(pr.number, pr.sourceBranch)
+            activeWorktreePR = pr.number
+            wtSpinner.succeed(`Worktree at ${worktreePath} (recovered after cleanup)`)
+          } catch (retryErr: any) {
+            wtSpinner.fail(`Worktree failed after retry: ${retryErr.message}`)
+
+            // Only fall back to cwd if current branch matches the PR branch.
+            // Otherwise we'd review the WRONG code.
+            const currentBranch = getCurrentBranch()
+            if (currentBranch === pr.sourceBranch) {
+              printInfo('Falling back to current directory (same branch)')
+            } else {
+              printError(
+                `Cannot review PR #${pr.number} — worktree creation failed and ` +
+                `current branch "${currentBranch}" does not match PR branch "${pr.sourceBranch}".`
+              )
+              process.exit(1)
+            }
+          }
         }
       }
 
@@ -204,6 +294,14 @@ program
 
       console.log()
       printReview(review)
+
+      // Notify user
+      const verdict = review.critical.length > 0
+        ? 'Changes requested'
+        : review.issues.length > 0
+          ? 'Approve with comments'
+          : 'Approved'
+      notifyReviewComplete(pr.number, verdict)
 
       // 7. Optionally post comment
       if (options.post) {
@@ -309,7 +407,13 @@ program
       const pr = await getPR(forgeInfo.forge, forgeInfo.workspace, forgeInfo.repo, prNum)
       printPRInfo(pr)
 
-      worktreePath = createWorktree(pr.number, pr.sourceBranch)
+      try {
+        worktreePath = createWorktree(pr.number, pr.sourceBranch)
+      } catch {
+        // Auto-cleanup and retry once
+        try { removeWorktree(pr.number) } catch { /* best effort */ }
+        worktreePath = createWorktree(pr.number, pr.sourceBranch)
+      }
       prNumber = pr.number
       activeWorktreePR = pr.number // Track for SIGINT cleanup
 

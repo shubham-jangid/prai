@@ -1,6 +1,7 @@
 import chalk from 'chalk'
 import boxen from 'boxen'
 import ora, { type Ora } from 'ora'
+import { execSync } from 'child_process'
 import type { PRInfo } from './api.js'
 import type { ReviewResult, ReviewIssue, DescribeResult } from './reviewer.js'
 
@@ -108,7 +109,9 @@ export function printReview(review: ReviewResult): void {
   console.log(chalk.dim('─'.repeat(60)))
   console.log(chalk.bold('  Summary'))
   console.log()
-  console.log(`  ${summary}`)
+  for (const line of wordWrap(summary, 56)) {
+    console.log(`  ${line}`)
+  }
   console.log()
 
   // Verdict
@@ -233,6 +236,50 @@ export function printDescription(desc: DescribeResult): void {
   console.log(`  ${chalk.dim('rollback')} ${riskAssessment.rollback}`)
   console.log()
 }
+
+// ─── Word wrap ──────────────────────────────────────────
+
+function wordWrap(text: string, width: number): string[] {
+  const lines: string[] = []
+  const words = text.split(/\s+/)
+  let current = ''
+
+  for (const word of words) {
+    if (current.length + word.length + 1 > width && current.length > 0) {
+      lines.push(current)
+      current = word
+    } else {
+      current = current ? `${current} ${word}` : word
+    }
+  }
+  if (current) lines.push(current)
+
+  return lines.length > 0 ? lines : ['']
+}
+
+// ─── System notification ────────────────────────────────
+
+export function notifyReviewComplete(prNumber: number, verdict: string): void {
+  // Terminal bell
+  process.stdout.write('\x07')
+
+  const title = `prai — PR #${prNumber}`
+  const message = `Review complete: ${verdict}`
+
+  try {
+    if (process.platform === 'darwin') {
+      execSync(
+        `osascript -e 'display notification "${message}" with title "${title}" sound name "Glass"'`,
+        { stdio: 'pipe' }
+      )
+    } else if (process.platform === 'linux') {
+      execSync(`notify-send "${title}" "${message}" 2>/dev/null`, { stdio: 'pipe' })
+    }
+    // Windows: terminal bell is sufficient
+  } catch { /* notification is best-effort */ }
+}
+
+// ─── Description Output ────────────────────────────────
 
 export function formatDescriptionAsMarkdown(desc: DescribeResult): string {
   const lines: string[] = []
