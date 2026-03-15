@@ -128,7 +128,7 @@ prai review 47 --focus security --context "JWT migration" --post
 detect forge → check credentials → fetch PR metadata → create worktree
 → compute diff → build prompt (PR context + team rules + flags + checklist)
 → Claude reviews with full codebase context → show results
-→ optionally post to PR → clean up worktree
+→ accept / give feedback (re-review loop) / post to PR → clean up worktree
 ```
 
 The review output includes:
@@ -139,6 +139,28 @@ The review output includes:
 - **Summary** and **verdict** (Approved / Approve with comments / Changes requested)
 
 Press **Ctrl+C** at any point to cancel — the worktree and Claude process are cleaned up automatically.
+
+### Supervised review (feedback loop)
+
+After the review, if Claude flags issues you disagree with, you can push back:
+
+```
+  2 Critical Issues
+
+  1. CRITICAL  src/auth/oauth.ts:89
+     Token refresh has no retry — a single 503 kills the session
+
+  VERDICT: Changes requested
+
+? What next? (Use arrow keys)
+❯ Accept review
+  Give feedback — Explain why an issue is incorrect or intentional
+  Post to PR
+```
+
+Choose **Give feedback** and explain why the flagged issue is correct or intentional. Claude re-evaluates with your context, dropping justified issues and keeping valid ones. You can go back and forth multiple rounds until you're satisfied.
+
+This turns the review into a conversation rather than a one-shot verdict.
 
 ### Generate a PR description
 
@@ -271,6 +293,7 @@ Key design decisions:
 - **Composable prompt pipeline** — the prompt is assembled from independent segments (PR context, team rules, focus areas, etc.). Each segment is a pure function that returns a string. Empty segments are skipped. Easy to extend.
 - **Adaptive review depth** — small diffs (<100 lines) get deep-dive instructions. Large diffs (>500 lines) get instructions to prioritize critical paths. Diffs over 8000 lines are truncated with a warning.
 - **Two-pass review** — critical issues (security, data safety) are separated from informational ones (performance, style) so you know what to fix first.
+- **Supervised review** — after seeing results, you can give feedback explaining why a finding is wrong. Claude re-evaluates, dropping justified issues. Multiple rounds supported.
 
 ## Claude Code skill
 
