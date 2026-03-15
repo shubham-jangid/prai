@@ -48,6 +48,7 @@ export interface PromptContext {
   focus?: string
   context?: string
   prompt?: string
+  deep?: boolean
   diffLines: number
 }
 
@@ -216,7 +217,24 @@ RULES:
 - Never fabricate. If you can't determine why a change was made, describe what it does.`
 }
 
-function toolGuidanceSegment(): string {
+function toolGuidanceSegment(deep?: boolean): string {
+  if (deep) {
+    return `TOOLS AVAILABLE — DEEP REVIEW MODE:
+You MUST actively read files in the codebase. Do NOT review from the diff alone.
+
+For EVERY changed file in the diff:
+1. Read the FULL file to understand the surrounding code, imports, and how the changed code fits.
+2. Grep for usages of any changed function/method/class to check for callers that might break.
+3. Check if related test files exist (use Glob) and whether they cover the changes.
+
+Additionally:
+- Read imported modules to verify type contracts and interfaces are respected.
+- Grep for similar patterns elsewhere that might need the same fix.
+- Check config files, constants, or type definitions referenced by changed code.
+
+Be thorough — you have enough turns to read many files. Use them.`
+  }
+
   return `TOOLS AVAILABLE:
 You can read files in the codebase for additional context.
 - Use Read to examine the full file when a diff hunk lacks sufficient context (e.g., to check what a function does, what a variable is initialized to, or whether error handling exists elsewhere in the file).
@@ -362,7 +380,7 @@ export function buildReviewPrompt(ctx: PromptContext): string {
 
   const segments = [
     baseReviewPrompt(),
-    toolGuidanceSegment(),
+    toolGuidanceSegment(ctx.deep),
     reviewChecklistSegment(),
     prContextSegment(ctx.pr, ctx.commitLog),
     teamRulesSegment(ctx.teamRules),
@@ -381,7 +399,7 @@ export function buildDescribePrompt(ctx: PromptContext): string {
 
   const segments = [
     baseDescribePrompt(),
-    toolGuidanceSegment(),
+    toolGuidanceSegment(ctx.deep),
     prContextSegment(ctx.pr, ctx.commitLog),
     contextSegment(ctx.context),
     focusSegment(ctx.focus),
@@ -474,6 +492,7 @@ function invokeClaude(
   prompt: string,
   cwd: string,
   signal?: AbortSignal,
+  maxTurns: number = 3,
 ): Promise<string> {
   if (signal?.aborted) {
     return Promise.reject(new Error('Review cancelled'))
@@ -483,7 +502,7 @@ function invokeClaude(
     const child = spawn('claude', [
       '-p', prompt,
       '--output-format', 'json',
-      '--max-turns', '3',
+      '--max-turns', String(maxTurns),
       '--allowedTools', 'Read,Grep,Glob',
     ], {
       cwd,
@@ -576,7 +595,8 @@ export async function reviewPR(
 ): Promise<{ review: ReviewResult; prompt: string }> {
   ensureClaudeCLI()
   const prompt = buildReviewPrompt(ctx)
-  const stdout = await invokeClaude(prompt, cwd, signal)
+  const maxTurns = ctx.deep ? 10 : 3
+  const stdout = await invokeClaude(prompt, cwd, signal, maxTurns)
   return { review: parseReviewOutput(stdout), prompt }
 }
 
@@ -587,6 +607,7 @@ export async function describePR(
 ): Promise<{ description: DescribeResult; prompt: string }> {
   ensureClaudeCLI()
   const prompt = buildDescribePrompt(ctx)
-  const stdout = await invokeClaude(prompt, cwd, signal)
+  const maxTurns = ctx.deep ? 10 : 3
+  const stdout = await invokeClaude(prompt, cwd, signal, maxTurns)
   return { description: parseDescribeOutput(stdout), prompt }
 }

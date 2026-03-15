@@ -144,8 +144,9 @@ program
   .option('--focus <areas>', 'Focus review on specific areas (e.g. "security, error handling")')
   .option('--context <description>', 'Explain what this change is about (e.g. "migrating from JWT to sessions")')
   .option('--prompt <instructions>', 'Add custom review instructions (e.g. "check for N+1 queries")')
+  .option('--deep', 'Deep review — Claude reads full files and checks callers (slower, more thorough)')
   .option('--verbose', 'Show the full prompt sent to Claude')
-  .action(async (prNumberArg: string | undefined, options: { post?: boolean; worktree?: boolean; focus?: string; context?: string; prompt?: string; verbose?: boolean }) => {
+  .action(async (prNumberArg: string | undefined, options: { post?: boolean; worktree?: boolean; focus?: string; context?: string; prompt?: string; deep?: boolean; verbose?: boolean }) => {
     try {
       printBanner()
 
@@ -276,16 +277,52 @@ program
       printDiffStat(diffStat)
       console.log()
 
-      // 6. Build prompt context & run review (cancellable via Ctrl+C)
+      // 6. Interactive options if no flags were provided
+      let focus = options.focus
+      let context = options.context
+      let prompt = options.prompt
+      let deep = options.deep
+
+      const hasFlags = !!(focus || context || prompt || deep !== undefined)
+
+      if (!hasFlags) {
+        const { reviewDepth } = await prompts({
+          type: 'select',
+          name: 'reviewDepth',
+          message: 'Review depth:',
+          choices: [
+            { title: 'Quick', description: 'Diff-only review, fastest (~1 min)', value: 'quick' },
+            { title: 'Deep', description: 'Reads full files, checks callers, more thorough (~3-5 min)', value: 'deep' },
+          ],
+          initial: 0,
+        }, { onCancel: onPromptsCancel })
+
+        if (reviewDepth === 'deep') {
+          deep = true
+        }
+
+        const { instructions } = await prompts({
+          type: 'text',
+          name: 'instructions',
+          message: 'Review instructions (optional, Enter to skip):',
+        }, { onCancel: onPromptsCancel })
+
+        if (instructions && instructions.trim()) {
+          prompt = instructions.trim()
+        }
+      }
+
+      // 7. Build prompt context & run review (cancellable via Ctrl+C)
       const commitLog = getCommitLog(reviewDir, pr.destBranch)
       const teamRules = loadTeamRules(reviewDir)
       const diffLines = diff.split('\n').length
 
       const ctx: PromptContext = {
         diff, diffStat, pr, commitLog, teamRules, diffLines,
-        focus: options.focus,
-        context: options.context,
-        prompt: options.prompt,
+        focus,
+        context,
+        prompt,
+        deep,
       }
 
       activeAbortController = new AbortController()
@@ -399,8 +436,9 @@ program
   .description('Generate a PR description from the diff')
   .option('--focus <areas>', 'Focus on specific areas of the change')
   .option('--context <description>', 'Explain what this change is about')
+  .option('--deep', 'Deep analysis — reads full files for better descriptions')
   .option('--verbose', 'Show the full prompt sent to Claude')
-  .action(async (prNumberArg: string | undefined, options: { focus?: string; context?: string; verbose?: boolean }) => {
+  .action(async (prNumberArg: string | undefined, options: { focus?: string; context?: string; deep?: boolean; verbose?: boolean }) => {
     let worktreePath: string | null = null
     let prNumber: number | null = null
 
@@ -459,6 +497,7 @@ program
         diffLines: diff.split('\n').length,
         focus: options.focus,
         context: options.context,
+        deep: options.deep,
       }
 
       activeAbortController = new AbortController()
